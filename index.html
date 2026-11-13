@@ -69,7 +69,7 @@
       <div class="row col"><span>Trigger click</span><p class="hint" id="click-info"></p><button id="btn-learn2" class="btn ghost small">Teach my trigger click</button></div>
       <label class="row col"><span>Dry fire sensitivity <b id="lbl-dsens"></b></span><input id="set-dsens" type="range" min="1" max="10" step="1"></label>
       <label class="row col"><span>Click match strictness <b id="lbl-match"></b></span><input id="set-match" type="range" min="0.5" max="0.95" step="0.05"></label>
-      <p class="hint">Lower it if real trigger clicks get ignored; raise it if holster noise counts as the click.</p>
+      <p class="hint">A sound counts as the click only if it matches the learned click, is about as loud, and is a single snap (a rack is two snaps). Lower strictness if real clicks show "not the click".</p>
       <label class="row"><span>Repeat: reholster time (s)</span><input id="set-rehol" type="number" min="2" max="30" step="1"></label>
       <label class="row"><span>Rep timeout, no click (s)</span><input id="set-rtime" type="number" min="2" max="15" step="1"></label>
 

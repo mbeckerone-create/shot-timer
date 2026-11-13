@@ -39,7 +39,7 @@
       this._biquad(this.p.hpHz); this._notch(this.p.notchHz);
       this.x1 = this.x2 = this.y1 = this.y2 = 0;
       this.dh = new Float64Array(RING); this.eh = new Float64Array(RING); this.ef = new Float64Array(RING);
-      this.hp = new Float32Array(SRING);
+      this.hp = new Float32Array(SRING); this.raw = new Float32Array(SRING);   // raw kept for dry-fire fingerprints
       this.frame = 0;               // total samples consumed
       this.nb = 0;                  // complete blocks
       this.accH = 0; this.accF = 0; this.accN = 0;
@@ -77,7 +77,7 @@
           const z = nt.b0 * y + nt.b1 * nt.x1 + nt.b2 * nt.x2 - nt.a1 * nt.y1 - nt.a2 * nt.y2; nt.x2 = nt.x1; nt.x1 = y; nt.y2 = nt.y1; nt.y1 = z; y = z;
           const q = this.ntf, zf = q.b0 * x + q.b1 * q.x1 + q.b2 * q.x2 - q.a1 * q.y1 - q.a2 * q.y2; q.x2 = q.x1; q.x1 = x; q.y2 = q.y1; q.y1 = zf; xf = zf;
         }
-        this.hp[this.frame & (SRING - 1)] = y; this.frame++;
+        this.hp[this.frame & (SRING - 1)] = y; this.raw[this.frame & (SRING - 1)] = x; this.frame++;
         this.accH += y * y; this.accF += xf * xf;
         if (++this.accN === B) {
           const k = this.nb & (RING - 1);
@@ -89,16 +89,18 @@
       }
       this._scan();
     }
-    // Sound fingerprint of a transient: log energy in 24 log-spaced bands, 2–20 kHz, over the first ~21 ms
-    // (1024 samples from just before the onset). Used by dry-fire mode to tell the trigger click from holster noise.
+    // Sound fingerprint of a transient: log energy in 32 log-spaced bands, 200 Hz–16 kHz, of the RAW signal over
+    // ~21 ms from just before the onset. Measured on a real dry-fire recording: trigger clicks match each other at
+    // ~0.99, slide-rack sounds ~0.94, speech lower. Used by dry-fire mode (together with loudness and isolation).
     _bands(on) {
       const n = 1024, re = this._re || (this._re = new Float64Array(n)), im = this._im || (this._im = new Float64Array(n));
-      for (let k = 0; k < n; k++) { re[k] = this.hp[(on - 64 + k) & (SRING - 1)] * (0.5 - 0.5 * Math.cos(2 * Math.PI * k / (n - 1))); im[k] = 0; }
+      for (let k = 0; k < n; k++) { re[k] = this.raw[(on - 64 + k) & (SRING - 1)] * (0.5 - 0.5 * Math.cos(2 * Math.PI * k / (n - 1))); im[k] = 0; }
       fft(re, im);
-      const NB = 24, lo = Math.log(2000), hi = Math.log(Math.min(20000, this.sr / 2 - 100)), e = new Array(NB).fill(1e-12);
+      // 16 kHz cap: phone mics, AAC and resamplers are unreliable above it
+      const NB = 32, lo = Math.log(200), hi = Math.log(16000), e = new Array(NB).fill(1e-12);
       for (let k = 1; k <= n / 2; k++) {
-        const f = k * this.sr / n; if (f < 2000 || f > Math.exp(hi)) continue;
-        const b = Math.min(NB - 1, Math.floor((Math.log(f) - lo) / (hi - lo) * NB)); e[b] += re[k] * re[k] + im[k] * im[k];
+        const f = k * this.sr / n, lf = Math.log(f); if (lf < lo || lf >= hi) continue;
+        e[Math.floor((lf - lo) / (hi - lo) * NB)] += re[k] * re[k] + im[k] * im[k];
       }
       return e.map((v) => +(10 * Math.log10(v)).toFixed(2));
     }

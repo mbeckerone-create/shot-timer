@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.2.0';
+const BUILD = 'v0.2.2';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -11,7 +11,7 @@ const DEFAULT_SETTINGS = {
   sens: 5, echo: 180, lock: 100, auto: 4,
   audioMode: 'play-and-record', beepOut: 'webaudio',
   mode: 'range',                                   // 'range' (live fire) | 'dry' (dry fire draws)
-  drySens: 7, dryRepeat: false, dryReholster: 5, dryTimeout: 5, clickMatch: 0.75, clickTpl: null, clickInfo: null,
+  drySens: 7, dryRepeat: false, dryReholster: 5, dryTimeout: 5, clickMatch: 0.9, clickTpl: null, clickInfo: null,
   shooters: ['Me'], guns: ['Pistol'], shooter: 'Me', gun: 'Pistol',
 };
 const store = {
@@ -21,6 +21,9 @@ const store = {
 let S = Object.assign({}, DEFAULT_SETTINGS, store.get('st.settings', {}));
 if (!S.shooters.includes(S.shooter)) S.shooter = S.shooters[0] || '';
 if (!S.guns.includes(S.gun)) S.gun = S.guns[0] || '';
+// v0.2.2 changed the click fingerprint (32 full-band bands): older templates must be re-taught
+if (S.clickTpl && S.clickTpl.length !== 32) { S.clickTpl = null; S.clickInfo = null; }
+if (S.clickMatch === 0.75) S.clickMatch = 0.9;
 let history = store.get('st.history', []);
 const saveSettings = () => store.set('st.settings', S);
 const saveHistory = () => store.set('st.history', history);
@@ -28,7 +31,7 @@ const saveHistory = () => store.set('st.history', history);
 const isDry = () => S.mode === 'dry';
 const drySensToDb = (s) => -30 - (s - 1) * 3;          // dry fire: 1:-30 dB … 7:-48 dB … 10:-57 dB (just above room noise)
 function detParams() {
-  if (isDry()) return { shotDb: drySensToDb(S.drySens), echoMs: 0, lockMs: 150 };
+  if (isDry()) return { shotDb: drySensToDb(S.drySens), echoMs: 0, lockMs: 60 };   // short lock: see both halves of a rack
   return { shotDb: ShotDetector.sensitivityToDb(S.sens), echoMs: S.echo, lockMs: S.lock };
 }
 // ---------- dry fire: trigger-click fingerprint ----------
@@ -37,6 +40,17 @@ function detParams() {
 const shape = (b) => { const m = b.reduce((a, c) => a + c, 0) / b.length; return b.map((v) => v - m); };
 function cosSim(a, b) { let s = 0, na = 0, nb = 0; for (let i = 0; i < a.length; i++) { s += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; } return s / Math.sqrt(na * nb + 1e-12); }
 function clickScore(bands) { return S.clickTpl && bands ? cosSim(shape(bands), S.clickTpl) : 1; }
+// A trigger click is ONE snap. A rack is two or more (pull back, slam forward) within a fraction of a second,
+// so a sound only counts if no similar-loudness sound is within 0.25 s of it. It must also sound like the learned
+// click and be about as loud (speech is far quieter). Verified on a labelled recording: 4/4 clicks, 0 racks/speech.
+const ISO_S = 0.25, ISO_DB = 20, LEVEL_DB = 15;
+function judgeClick(c, all) {
+  const score = clickScore(c.bands);
+  const loudEnough = !S.clickInfo || c.db >= S.clickInfo.db - LEVEL_DB;
+  const neighbor = all.find((o) => o !== c && Math.abs(o.t - c.t) < ISO_S && o.db > c.db - ISO_DB);
+  const reason = score < S.clickMatch ? 'sound' : !loudEnough ? 'quiet' : neighbor ? 'double' : '';
+  return { score, ok: !reason, reason };
+}
 // Build the template from the learned sounds: keep the ones most like each other (drops a slide rack or a bump).
 function buildTemplate(list) {
   const sh = list.map((q) => shape(q.bands));
@@ -167,7 +181,7 @@ async function start() {
   }
   if (audio.ctx.state !== 'running') await audio.ctx.resume();
   if (T.state === 'done' && T.shots.length && !T.saved) autoSaveIfNeeded();
-  T.shots = []; T.ignored = []; T.pending = []; T.beepFrame = null; T.saved = false; renderShots(); renderStats();
+  T.shots = []; T.ignored = []; T.dryEvents = []; T.pending = []; T.beepFrame = null; T.saved = false; renderShots(); renderStats();
   const lo = Math.min(S.dmin, S.dmax), hi = Math.max(S.dmin, S.dmax);
   T.delay = lo + Math.random() * (hi - lo);
   const beepAt = audio.ctx.currentTime + Math.max(0.15, T.delay);
@@ -210,7 +224,7 @@ function goLive() {
   setStatus('GO', 'live'); setMain('STOP', 'stop');
   clearInterval(T.autoTimer);
   if (isDry()) {                                       // dry fire: wait for one trigger click, give up after the rep timeout
-    clearTimeout(T.repTimer); T.repTimer = setTimeout(() => { if (T.state === 'live') endRep(null); }, S.dryTimeout * 1000);
+    clearTimeout(T.repTimer); T.repTimer = setTimeout(() => { if (T.state === 'live') endRep(null); }, (S.dryTimeout + ISO_S + 0.1) * 1000);
     return;
   }
   T.autoTimer = setInterval(() => {
@@ -224,9 +238,15 @@ function goLive() {
 function addShot(frame, db, bands) {
   if (frame <= T.beepFrame) return;
   if (isDry()) {
-    const t = (frame - T.beepFrame) / audio.sr, score = clickScore(bands);
-    if (score >= S.clickMatch) return endRep({ t, db, score });
-    T.ignored.push({ t, db, score }); renderShots(); return;   // holster clack or other noise: shown greyed out
+    // decide 0.3 s later, once we know whether another snap followed (a rack) — the time is still the click's onset
+    const c = { t: (frame - T.beepFrame) / audio.sr, db, bands }; T.dryEvents.push(c);
+    setTimeout(() => {
+      if (T.state !== 'live') return;
+      const j = judgeClick(c, T.dryEvents);
+      if (j.ok) return endRep({ t: c.t, db, score: j.score });
+      T.ignored.push({ t: c.t, db, score: j.score, reason: j.reason }); renderShots();   // greyed out with the reason
+    }, (ISO_S + 0.05) * 1000);
+    return;
   }
   T.shots.push({ t: (frame - T.beepFrame) / audio.sr, db, removed: false });
   T.shots.sort((a, b) => a.t - b.t);
@@ -290,26 +310,47 @@ function saveDryRep(hit) {
     shooter: S.shooter, gun: S.gun, delay: +T.delay.toFixed(2), acoustic: T.acoustic, match: +hit.score.toFixed(2), shots: [{ t: +hit.t.toFixed(4) }] });
   saveHistory();
 }
-// ---------- dry fire: teach the trigger click ----------
+// ---------- dry fire: teach the trigger click (guided) ----------
+// 5 rounds: beep → user dry-fires once → we listen ONLY for 2 s after that beep and keep the strongest sound.
+// Then "Rack now" while the mic is ignored, so racking the slide can never be learned as the click.
+const LEARN_ROUNDS = 5, LEARN_WIN = 2.0, LEARN_GAP = 3500;
 async function startLearn() {
   try { await ensureAudio(); } catch { setStatus('Mic blocked', 'err'); return; }
   if (T.state === 'standby' || T.state === 'live' || T.state === 'reholster') stopSeries();
-  T.learning = { list: [], timer: setTimeout(finishLearn, 30000) };
-  audio.node.port.postMessage({ type: 'params', params: detParams() });
-  audio.node.port.postMessage({ type: 'listen' });
-  setStatus('Teaching click', 'standby'); setMain('DONE', 'standby');
-  $('beepinfo').textContent = 'Dry fire 5 times, about 2 s apart. Rack the slide quietly between clicks.'; $('big').textContent = '0 / 5';
-  requestWake();
+  T.learning = { list: [], round: 0, cands: [], beepFrame: null, timers: [] };
+  setMain('CANCEL', 'standby'); requestWake(); learnRound();
 }
-function learnSound(m) {
-  const L = T.learning; L.list.push({ bands: m.bands, db: m.peakDb });
-  $('big').textContent = `${L.list.length} / 5`;
-  if (L.list.length >= 5) finishLearn();
+function learnRound() {
+  const L = T.learning; if (!L) return;
+  L.round++; L.cands = []; L.beepFrame = null;
+  const beepAt = audio.ctx.currentTime + 0.8;
+  T.oscs = [scheduleBeep(beepAt, S.blen)];
+  audio.node.port.postMessage({ type: 'params', params: detParams() });
+  audio.node.port.postMessage({ type: 'arm', beepAt, parAt: [], beepMs: S.blen, beepHz: S.hz, latency: latencyEstimate() });
+  setStatus(`Teach click ${L.round} / ${LEARN_ROUNDS}`, 'live'); $('big').textContent = `${L.list.length} / ${LEARN_ROUNDS}`;
+  $('beepinfo').textContent = 'On the beep: dry fire ONCE. Don\'t rack yet.';
+  L.timers.push(setTimeout(learnRoundEnd, (0.8 + LEARN_WIN + 0.3) * 1000));
+}
+function learnSound(m) {                               // sound reported while teaching
+  T.learning.cands.push({ frame: m.frame, bands: m.bands, db: m.peakDb });   // filtered against the beep at round end
+}
+function learnRoundEnd() {
+  const L = T.learning; if (!L) return;
+  audio.node.port.postMessage({ type: 'disarm' });
+  const bf = L.beepFrame, win = L.cands.filter((c) => bf != null && c.frame > bf && c.frame - bf <= LEARN_WIN * audio.sr);
+  L.cands = win;
+  if (win.length) L.list.push(win.reduce((a, c) => (c.db > a.db ? c : a)));    // the click = loudest sound in the window
+  $('big').textContent = `${L.list.length} / ${LEARN_ROUNDS}`;
+  if (L.round >= LEARN_ROUNDS) return finishLearn();
+  setStatus(L.cands.length ? 'Got it — rack now' : 'No click heard — rack and get ready', 'standby');
+  $('beepinfo').textContent = 'Rack / reset the trigger now. Next beep in a few seconds…';
+  L.timers.push(setTimeout(learnRound, LEARN_GAP));
 }
 function finishLearn() {
-  const L = T.learning; if (!L) return; clearTimeout(L.timer); T.learning = null;
+  const L = T.learning; if (!L) return; L.timers.forEach(clearTimeout); T.learning = null;
+  for (const o of T.oscs) { try { o.stop(); } catch {} }
   audio.node.port.postMessage({ type: 'disarm' }); releaseWake(); setMain('START'); $('big').textContent = '0.000';
-  if (L.list.length < 3) { setStatus('Not enough clicks', 'err'); $('beepinfo').textContent = `Heard ${L.list.length}. Try again closer to the phone, or raise Dry fire sensitivity.`; return; }
+  if (L.list.length < 3) { setStatus('Not enough clicks', 'err'); $('beepinfo').textContent = `Heard ${L.list.length} clicks. Try again closer to the phone, or raise Dry fire sensitivity.`; return; }
   const r = buildTemplate(L.list);
   S.clickTpl = r.tpl; S.clickInfo = { used: r.used, of: r.of, consistency: +r.consistency.toFixed(2), db: +r.db.toFixed(1), at: new Date().toISOString() }; saveSettings();
   setStatus('Click learned ✓'); $('beepinfo').textContent = `Learned from ${r.used} of ${r.of} clicks (consistency ${r.consistency.toFixed(2)}).`;
@@ -324,6 +365,7 @@ function renderClickInfo() {
 function onWorklet(m) {
   if (m.type === 'level') { micHealth(m.db); return drawMeter(m.db); }
   if (m.type === 'beepdiag') return onBeepDiag(m);
+  if (m.type === 'beep' && T.learning) { T.learning.beepFrame = m.frame; return; }
   if (m.type === 'beep' && (T.state === 'standby' || T.state === 'live') && T.beepFrame == null) {
     // The worklet located the beep in the mic stream: that is t=0 for every shot.
     T.beepFrame = m.frame; T.acoustic = m.acoustic;
@@ -482,7 +524,7 @@ function renderShots() {
     head.innerHTML = '<span>Rep</span><span>Draw</span><span class="sp">Match</span><span></span>'; ol.appendChild(head);
     for (const q of (T.state === 'live' ? T.ignored : [])) {
       const li = document.createElement('li'); li.className = 'removed';
-      li.innerHTML = `<span class="n"></span><span class="t">${fmt(q.t)}</span><span class="sp">ignored ${q.score.toFixed(2)}</span><span></span>`; ol.appendChild(li);
+      li.innerHTML = `<span class="n"></span><span class="t">${fmt(q.t)}</span><span class="sp">${{ sound: 'not the click', quiet: 'too quiet', double: 'double snap' }[q.reason] || 'ignored'}</span><span></span>`; ol.appendChild(li);
     }
     T.series.slice().reverse().forEach((r, i) => {
       const li = document.createElement('li'); if (r.t == null) li.className = 'removed';
