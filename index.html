@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Shot Timer</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Shot Timer">
+<meta name="theme-color" content="#0d0f12">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="app">
+
+  <!-- TIMER -->
+  <section id="view-timer" class="view active">
+    <header class="bar">
+      <button id="chip-shooter" class="chip" aria-label="Shooter"><span class="chip-k">Shooter</span><span id="lbl-shooter">—</span></button>
+      <button id="chip-gun" class="chip" aria-label="Gun"><span class="chip-k">Gun</span><span id="lbl-gun">—</span></button>
+    </header>
+
+    <div class="readout">
+      <div id="status" class="status">Ready</div>
+      <div id="big" class="big">0.000</div>
+      <div class="stats">
+        <div><span class="k">Shots</span><span id="s-count" class="v">0</span></div>
+        <div><span class="k">First</span><span id="s-first" class="v">—</span></div>
+        <div><span class="k">Split</span><span id="s-split" class="v">—</span></div>
+        <div><span class="k">Avg split</span><span id="s-avg" class="v">—</span></div>
+      </div>
+      <div class="meter" aria-hidden="true"><div id="meter-fill"></div><div id="meter-thr"></div></div>
+      <div id="beepinfo" class="hint"></div>
+    </div>
+
+    <ol id="shotlist" class="shotlist"></ol>
+
+    <div class="controls">
+      <button id="btn-main" class="btn primary big-btn">START</button>
+      <button id="btn-review" class="btn ghost" disabled>Save</button>
+    </div>
+  </section>
+
+  <!-- HISTORY -->
+  <section id="view-history" class="view">
+    <header class="bar"><h1>History</h1><button id="btn-export" class="btn ghost small">Export CSV</button></header>
+    <div id="hist-summary" class="summary"></div>
+    <div id="history" class="history"></div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section id="view-settings" class="view">
+    <header class="bar"><h1>Settings</h1></header>
+    <div class="form">
+      <h2>Start beep</h2>
+      <label class="row"><span>Random delay min (s)</span><input id="set-dmin" type="number" min="0" max="30" step="0.5"></label>
+      <label class="row"><span>Random delay max (s)</span><input id="set-dmax" type="number" min="0" max="30" step="0.5"></label>
+      <label class="row"><span>Beep pitch (Hz)</span><input id="set-hz" type="number" min="800" max="4000" step="100"></label>
+      <label class="row"><span>Beep length (ms)</span><input id="set-blen" type="number" min="100" max="800" step="50"></label>
+      <label class="row"><span>Par time (s, 0 = off)</span><input id="set-par" type="number" min="0" max="60" step="0.05"></label>
+
+      <h2>Detection</h2>
+      <label class="row col"><span>Sensitivity <b id="lbl-sens"></b></span><input id="set-sens" type="range" min="1" max="10" step="1"></label>
+      <p class="hint">Higher = hears quieter shots (and more of your neighbors). Watch the meter: the line is the threshold.</p>
+      <label class="row"><span>Echo window (ms)</span><input id="set-echo" type="number" min="0" max="600" step="10"></label>
+      <label class="row"><span>Min time between shots (ms)</span><input id="set-lock" type="number" min="40" max="400" step="10"></label>
+      <label class="row"><span>Auto-stop after quiet (s, 0 = off)</span><input id="set-auto" type="number" min="0" max="60" step="1"></label>
+
+      <h2>Shooters &amp; guns</h2>
+      <label class="row col"><span>Shooters (one per line)</span><textarea id="set-shooters" rows="4"></textarea></label>
+      <label class="row col"><span>Guns (one per line)</span><textarea id="set-guns" rows="4"></textarea></label>
+
+      <h2>Test with a recording</h2>
+      <p class="hint">Pick a video or audio file of a shooting string. The same detector runs on it and lists every shot.</p>
+      <input id="file-test" type="file" accept="audio/*,video/*">
+      <div id="file-result" class="file-result"></div>
+
+      <h2>Data</h2>
+      <button id="btn-clear" class="btn danger small">Delete all history</button>
+      <p class="hint" id="build"></p>
+    </div>
+  </section>
+
+  <nav class="tabs">
+    <button data-view="timer" class="tab active">Timer</button>
+    <button data-view="history" class="tab">History</button>
+    <button data-view="settings" class="tab">Settings</button>
+  </nav>
+
+  <dialog id="picker"><form method="dialog"><h3 id="picker-title"></h3><div id="picker-list"></div><button class="btn ghost" value="cancel">Cancel</button></form></dialog>
+</main>
+<script src="detector.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
