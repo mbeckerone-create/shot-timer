@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.2.2';
+const BUILD = 'v0.2.3';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -43,11 +43,13 @@ function clickScore(bands) { return S.clickTpl && bands ? cosSim(shape(bands), S
 // A trigger click is ONE snap. A rack is two or more (pull back, slam forward) within a fraction of a second,
 // so a sound only counts if no similar-loudness sound is within 0.25 s of it. It must also sound like the learned
 // click and be about as loud (speech is far quieter). Verified on a labelled recording: 4/4 clicks, 0 racks/speech.
-const ISO_S = 0.25, ISO_DB = 20, LEVEL_DB = 15;
+// Tuned on a 2nd recording at ~3 ft: the click's own room echo arrives < 80 ms after it (not a 2nd snap), and a
+// click drilled at 3 ft is far quieter than one taught at < 1 ft, so the loudness window is wide.
+const ISO_S = 0.25, ISO_MIN = 0.08, ISO_DB = 15, LEVEL_DB = 30;
 function judgeClick(c, all) {
   const score = clickScore(c.bands);
   const loudEnough = !S.clickInfo || c.db >= S.clickInfo.db - LEVEL_DB;
-  const neighbor = all.find((o) => o !== c && Math.abs(o.t - c.t) < ISO_S && o.db > c.db - ISO_DB);
+  const neighbor = all.find((o) => o !== c && Math.abs(o.t - c.t) >= ISO_MIN && Math.abs(o.t - c.t) < ISO_S && o.db > c.db - ISO_DB);
   const reason = score < S.clickMatch ? 'sound' : !loudEnough ? 'quiet' : neighbor ? 'double' : '';
   return { score, ok: !reason, reason };
 }
