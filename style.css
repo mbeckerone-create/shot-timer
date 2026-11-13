@@ -82,3 +82,4 @@ dialog h3 { margin: 0 0 10px; }
 #picker-list button { display: block; width: 100%; margin-bottom: 8px; text-align: left; }
 .status.live { font-size: 22px; }
 .readout.go { border-color: var(--ok); box-shadow: 0 0 0 2px var(--ok) inset; }
+.form select { font: inherit; background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }

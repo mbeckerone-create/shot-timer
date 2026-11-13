@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.1.1';
+const BUILD = 'v0.1.2';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -9,6 +9,7 @@ const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 const DEFAULT_SETTINGS = {
   dmin: 2, dmax: 5, hz: 2400, blen: 300, par: 0,
   sens: 5, echo: 180, lock: 100, auto: 4,
+  audioMode: 'play-and-record',
   shooters: ['Me'], guns: ['Pistol'], shooter: 'Me', gun: 'Pistol',
 };
 const store = {
@@ -32,7 +33,7 @@ const audio = { ctx: null, node: null, stream: null, sr: 48000, ready: null, gai
 async function ensureAudio() {
   if (audio.ready) return audio.ready;
   audio.ready = (async () => {
-    if (navigator.audioSession) { try { navigator.audioSession.type = 'play-and-record'; } catch {} }
+    if (navigator.audioSession && S.audioMode !== 'default') { try { navigator.audioSession.type = S.audioMode; } catch {} }
     const ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
     audio.ctx = ctx;
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -155,6 +156,7 @@ function stop() {
 
 function onWorklet(m) {
   if (m.type === 'level') return drawMeter(m.db);
+  if (m.type === 'beepdiag') return onBeepDiag(m);
   if (m.type === 'beep' && (T.state === 'standby' || T.state === 'live') && T.beepFrame == null) {
     // The worklet located the beep in the mic stream: that is t=0 for every shot.
     T.beepFrame = m.frame; T.acoustic = m.acoustic;
@@ -167,6 +169,63 @@ function onWorklet(m) {
     if (T.beepFrame == null) T.pending.push({ frame: m.frame, db: m.peakDb });   // beep timing not confirmed yet
     else addShot(m.frame, m.peakDb);
   }
+}
+
+// ---------- beep diagnostics ----------
+// Re-scans the raw mic audio captured around the start beep and reports where (and how loud) the beep tone was.
+let lastDiag = null;
+function goertzelScan(x, sr, hz) {
+  const N = Math.round(sr / 1000), coef = 2 * Math.cos(2 * Math.PI * hz / sr), out = [];
+  for (let b = 0; b + N <= x.length; b += N) {
+    let s1 = 0, s2 = 0, en = 0;
+    for (let k = 0; k < N; k++) { const v = x[b + k], s0 = v + coef * s1 - s2; s2 = s1; s1 = s0; en += v * v; }
+    const pw = s1 * s1 + s2 * s2 - coef * s1 * s2;
+    out.push({ b, ratio: pw / (N / 2 * en + 1e-20), db: 10 * Math.log10(en / N + 1e-14), tone: 10 * Math.log10(pw / (N * N / 4) + 1e-14) });
+  }
+  return out;
+}
+function onBeepDiag(m) {
+  const sr = m.sampleRate, sc = goertzelScan(m.buf, sr, m.hz);
+  // a beep = at least 10 ms in a row of pure tone (a gunshot can look tonal for a block or two, never 10)
+  const tonal = []; let run = [];
+  for (const c of sc.concat([{ ratio: 0 }])) { if (c.ratio > 0.3) run.push(c); else { if (run.length >= 10) tonal.push(...run); run = []; } }
+  const best = (tonal.length ? tonal : sc).reduce((a, c) => (c.tone > a.tone ? c : a), tonal[0] || sc[0]);
+  const pure = sc.reduce((a, c) => (c.ratio > a.ratio ? c : a), sc[0]);
+  const pre = sc.filter((c) => c.b < 0.25 * sr);
+  const noise = pre.length ? pre.map((c) => c.db).sort((a, b) => a - b)[pre.length >> 1] : -99;
+  const loud = Math.max(...sc.map((c) => c.db));
+  lastDiag = {
+    at: new Date().toLocaleTimeString(), heard: m.acoustic, sr, hz: m.hz,
+    toneFound: tonal.length > 0, bestPurity: pure.ratio, toneDb: best.tone, toneRatio: best.ratio, toneAtMs: ((m.from + best.b) - m.exp) / sr * 1000,
+    noiseDb: noise, loudDb: loud, latencyMs: m.latency * 1000, ua: navigator.userAgent.replace(/^Mozilla\/5.0 /, ''),
+    audioMode: S.audioMode, audioSession: navigator.audioSession ? navigator.audioSession.type : 'n/a',
+    raw: m.buf,
+  };
+  renderDiag();
+  if (!m.acoustic) $('beepinfo').textContent = tonal.length ? `Beep not heard by mic — faint beep tone at ${best.tone.toFixed(0)} dB (noise ${noise.toFixed(0)} dB). Settings › Diagnostics` : 'Beep not heard by mic — no beep tone in the recording at all. Settings › Diagnostics';
+}
+function renderDiag() {
+  const d = lastDiag, el = $('diag'); if (!el) return;
+  if (!d) { el.textContent = 'Run one string on the Timer tab, then come back here.'; return; }
+  el.textContent =
+    `Last string ${d.at}: beep ${d.heard ? 'HEARD by mic ✓' : 'NOT heard ✗'}\n` +
+    (d.toneFound ? `Beep tone peak: ${d.toneDb.toFixed(1)} dB, purity ${d.toneRatio.toFixed(2)}, at ${d.toneAtMs >= 0 ? '+' : ''}${d.toneAtMs.toFixed(0)} ms vs expected\n` : `No beep tone found (best purity ${d.bestPurity.toFixed(2)})\n`) +
+    `Background noise: ${d.noiseDb.toFixed(1)} dB   loudest sound: ${d.loudDb.toFixed(1)} dB\n` +
+    `Latency estimate: ${d.latencyMs.toFixed(0)} ms   sample rate: ${d.sr}\n` +
+    `Audio mode: ${d.audioMode} (session: ${d.audioSession})\n${d.ua}`;
+}
+function wavBlob(x, sr) {
+  const b = new ArrayBuffer(44 + x.length * 2), v = new DataView(b), w = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  w(0, 'RIFF'); v.setUint32(4, 36 + x.length * 2, true); w(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, x.length * 2, true);
+  for (let i = 0; i < x.length; i++) v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, x[i])) * 32767, true);
+  return new Blob([b], { type: 'audio/wav' });
+}
+async function shareDiag() {
+  if (!lastDiag) return;
+  const file = new File([wavBlob(lastDiag.raw, lastDiag.sr)], `beep-debug-${Date.now()}.wav`, { type: 'audio/wav' });
+  try { if (navigator.canShare && navigator.canShare({ files: [file] })) return await navigator.share({ files: [file], text: $('diag').textContent }); } catch (e) { if (e.name === 'AbortError') return; }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = file.name; a.click();
 }
 
 // ---------- rendering ----------
@@ -299,6 +358,9 @@ function bindSettings() {
   $('set-guns').addEventListener('change', (e) => { S.guns = lines(e.target); if (!S.guns.includes(S.gun)) S.gun = S.guns[0] || ''; saveSettings(); renderChips(); });
   $('btn-clear').onclick = () => { if (confirm('Delete ALL saved strings? This cannot be undone.')) { history = []; saveHistory(); renderHistory(); } };
   $('file-test').addEventListener('change', analyzeFile);
+  const am = $('set-audiomode'); am.value = S.audioMode;
+  am.addEventListener('change', () => { S.audioMode = am.value; saveSettings(); $('audiomode-note').textContent = 'Close and reopen the app for this to take effect.'; });
+  $('btn-diag-share').onclick = shareDiag; renderDiag();
   $('build').textContent = `Build ${BUILD}`;
 }
 

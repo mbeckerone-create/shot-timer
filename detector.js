@@ -12,11 +12,26 @@
 (function (root) {
   const DEFAULTS = {
     hpHz: 2000, armDb: 15, shotDb: -26, hpFracDb: -9, confirmMs: 70, lockMs: 100,
-    floorMs: 300, echoMs: 180, echoDb: 6, backMs: 60, backDb: 20,
+    floorMs: 300, echoMs: 180, echoDb: 6, backMs: 60, backDb: 20, tonal: 0.6, tonalGapMs: 60,
   };
   const RING = 4096;            // blocks of history (~4 s)
   const SRING = 1 << 15;        // samples of HP history (~0.68 s @48k)
 
+  function fft(re, im) {          // in-place radix-2
+    const n = re.length;
+    for (let i = 1, j = 0; i < n; i++) { let bit = n >> 1; for (; j & bit; bit >>= 1) j ^= bit; j ^= bit; if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; } }
+    for (let len = 2; len <= n; len <<= 1) {
+      const ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+      for (let i = 0; i < n; i += len) {
+        let cr = 1, ci = 0;
+        for (let k = 0; k < len / 2; k++) {
+          const ar = re[i + k + len / 2] * cr - im[i + k + len / 2] * ci, ai = re[i + k + len / 2] * ci + im[i + k + len / 2] * cr;
+          re[i + k + len / 2] = re[i + k] - ar; im[i + k + len / 2] = im[i + k] - ai; re[i + k] += ar; im[i + k] += ai;
+          const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+        }
+      }
+    }
+  }
   class ShotDetector {
     constructor(sampleRate, params = {}) {
       this.sr = sampleRate; this.p = Object.assign({}, DEFAULTS, params);
@@ -60,6 +75,19 @@
       }
       this._scan();
     }
+    // Fraction of 1.5–16 kHz energy in the 3 strongest FFT bins (1024-pt, Hann) around sample c. ~1 for a beep, ~0.16 for a shot.
+    _top3(c) {
+      const n = 1024, re = this._re || (this._re = new Float64Array(n)), im = this._im || (this._im = new Float64Array(n));
+      for (let k = 0; k < n; k++) { re[k] = this.hp[(c - n / 4 + k) & (SRING - 1)] * (0.5 - 0.5 * Math.cos(2 * Math.PI * k / (n - 1))); im[k] = 0; }
+      fft(re, im);
+      let tot = 0, a = 0, b = 0, d = 0;
+      for (let k = 0; k <= n / 2; k++) {
+        const f = k * this.sr / n; if (f < 1500 || f > 16000) continue;
+        const pw = re[k] * re[k] + im[k] * im[k] + 1e-20; tot += pw;
+        if (pw > a) { d = b; b = a; a = pw; } else if (pw > b) { d = b; b = pw; } else if (pw > d) d = pw;
+      }
+      return (a + b + d) / tot;
+    }
     levelAndReset() { const v = this.peakSinceReport; this.peakSinceReport = -120; return v; }
     _d(i) { return this.dh[i & (RING - 1)]; }
     _scan() {
@@ -70,7 +98,7 @@
         a.sort((u, v) => u - v); this.floor = a[a.length >> 1];
       }
       const alpha = 1 / p.floorMs, C = p.confirmMs;
-      while (this.i < this.nb - C - 3) {
+      while (this.i < this.nb - C - 3 - 90) {      // 90 ms extra look-ahead for the tone check
         const i = this.i, d = this._d(i);
         if (i >= this.lock && d > this.floor + p.armDb) {
           let pk = 0, pv = -1e9;
@@ -86,6 +114,10 @@
             const s0 = (k - 1) * this.B, s1 = (j + 1) * this.B; let on = s0;
             for (let s = s0; s < s1; s++) { if (Math.abs(this.hp[s & (SRING - 1)]) > thr) { on = s; break; } }
             this.lock = j + p.lockMs; this.i = this.lock;
+            let pks = on, pa = 0; const n70 = Math.round(0.07 * this.sr);
+            for (let s = on; s < on + n70; s++) { const a = Math.abs(this.hp[s & (SRING - 1)]); if (a > pa) { pa = a; pks = s; } }
+            const g = Math.round(p.tonalGapMs * this.sr / 1000);
+            if (this._top3(pks) > p.tonal && (this._top3(pks + g) > p.tonal || this._top3(pks - g) > p.tonal)) continue;  // sustained tone = a beep
             const last = this.shots[this.shots.length - 1];
             const isEcho = last && (on - last.frame) < p.echoMs * this.sr / 1000 && pv < last.peakDb - p.echoDb;
             if (!isEcho && !this._blanked(on)) {
@@ -110,6 +142,7 @@
       this.coef = 2 * Math.cos(2 * Math.PI * hz / sampleRate);
       this.from = Infinity; this.to = -Infinity; this.found = null; this.run = 0; this.runStart = 0;
       this.s1 = this.s2 = this.en = 0; this.n = 0; this.blockStart = 0;
+      this.ring = new Float32Array(1024); this.f = 0;
     }
     window(fromFrame, toFrame) { this.from = fromFrame; this.to = toFrame; this.found = null; this.run = 0; }
     get active() { return this.found === null && this.to > this.from; }
@@ -117,14 +150,19 @@
       for (let k = 0; k < buf.length; k++) {
         const f = startFrame + k;
         if (this.n === 0) this.blockStart = f;
-        const x = buf[k], s0 = x + this.coef * this.s1 - this.s2; this.s2 = this.s1; this.s1 = s0; this.en += x * x;
+        const x = buf[k]; this.ring[f & 1023] = x; this.f = f;
+        const s0 = x + this.coef * this.s1 - this.s2; this.s2 = this.s1; this.s1 = s0; this.en += x * x;
         if (++this.n === this.N) {
           const pw = this.s1 * this.s1 + this.s2 * this.s2 - this.coef * this.s1 * this.s2;
           const ratio = pw / (this.N / 2 * this.en + 1e-20), db = 10 * Math.log10(this.en / this.N + 1e-14);
           const inWin = this.blockStart >= this.from && this.blockStart <= this.to;
-          if (this.found === null && inWin && ratio > 0.4 && db > -60) {
+          if (this.found === null && inWin && ratio > 0.3 && db > -72) {
             if (this.run++ === 0) this.runStart = this.blockStart;
-            if (this.run >= 3) this.found = this.runStart;
+            if (this.run >= 3) {          // refine to the first sample of the tone (sample-accurate)
+              let amp = 0; for (let q = f - this.N + 1; q <= f; q++) amp = Math.max(amp, Math.abs(this.ring[q & 1023]));
+              let on = this.runStart; for (let q = this.runStart - this.N; q <= f; q++) if (Math.abs(this.ring[q & 1023]) > 0.3 * amp) { on = q; break; }
+              this.found = on;
+            }
           } else this.run = 0;
           this.s1 = this.s2 = this.en = 0; this.n = 0;
         }

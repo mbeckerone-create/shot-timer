@@ -78,6 +78,12 @@
       <input id="file-test" type="file" accept="audio/*,video/*">
       <div id="file-result" class="file-result"></div>
 
+      <h2>Diagnostics</h2>
+      <label class="row"><span>iPhone audio mode</span><select id="set-audiomode"><option value="play-and-record">Play &amp; record</option><option value="default">iOS default</option></select></label>
+      <p class="hint" id="audiomode-note">If the start beep is never heard by the mic, try the other mode.</p>
+      <div id="diag" class="file-result"></div>
+      <button id="btn-diag-share" class="btn ghost small">Share beep recording</button>
+
       <h2>Data</h2>
       <button id="btn-clear" class="btn danger small">Delete all history</button>
       <p class="hint" id="build"></p>

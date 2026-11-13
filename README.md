@@ -15,7 +15,10 @@ A phone shot timer and training log that runs as a web app saved to the iPhone h
 2 kHz high-pass (rejects wind/handling) → 1 ms energy blocks → adaptive noise floor → arm at +15 dB →
 confirm the loudest block within 70 ms (absolute level + must be mostly high-frequency) → backtrack to
 the burst's first sample (so a bullet crack/precursor times the shot from its first sound) →
-100 ms lockout + echo rejection (quieter by 6 dB within 180 ms).
+100 ms lockout + echo rejection (quieter by 6 dB within 180 ms) + beep rejection (a sustained pure tone,
+such as another bay's shot timer, is never counted as a shot).
+
+Settings › Diagnostics shows what the mic heard during the last start beep, and can share that recording.
 `tools/detect2.py` is the Python reference; `tools/parity.js` proves the JS matches it.
 
 ## Tests
