@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.1.2';
+const BUILD = 'v0.1.3';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -9,7 +9,7 @@ const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 const DEFAULT_SETTINGS = {
   dmin: 2, dmax: 5, hz: 2400, blen: 300, par: 0,
   sens: 5, echo: 180, lock: 100, auto: 4,
-  audioMode: 'play-and-record',
+  audioMode: 'play-and-record', beepOut: 'webaudio',
   shooters: ['Me'], guns: ['Pistol'], shooter: 'Me', gun: 'Pistol',
 };
 const store = {
@@ -33,13 +33,23 @@ const audio = { ctx: null, node: null, stream: null, sr: 48000, ready: null, gai
 async function ensureAudio() {
   if (audio.ready) return audio.ready;
   audio.ready = (async () => {
-    if (navigator.audioSession && S.audioMode !== 'default') { try { navigator.audioSession.type = S.audioMode; } catch {} }
+    setSession(S.audioMode);
     const ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
     audio.ctx = ctx;
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
     });
     audio.stream = stream;
+    // Confirm what iOS actually applied; if any processing is still on, ask again on the live track.
+    const track = stream.getAudioTracks()[0], g0 = track.getSettings(), ti = { ec0: g0.echoCancellation, ns0: g0.noiseSuppression, agc0: g0.autoGainControl };
+    try { const cp = track.getCapabilities ? track.getCapabilities() : {}; ti.ecCaps = JSON.stringify(cp.echoCancellation); } catch {}
+    if (g0.echoCancellation || g0.noiseSuppression || g0.autoGainControl) {
+      try { await track.applyConstraints({ echoCancellation: false, noiseSuppression: false, autoGainControl: false }); ti.apply = 'ok'; }
+      catch (e) { ti.apply = 'failed: ' + (e.name || e.message); }
+    }
+    const g1 = track.getSettings();
+    Object.assign(ti, { ec: g1.echoCancellation, ns: g1.noiseSuppression, agc: g1.autoGainControl, sampleRate: g1.sampleRate, channelCount: g1.channelCount });
+    audio.trackInfo = ti; console.log('[shot-timer] mic track settings', g0, '→', g1, ti);
     await ctx.audioWorklet.addModule('detector.js');
     await ctx.audioWorklet.addModule('worklet.js');
     const src = ctx.createMediaStreamSource(stream);
@@ -47,6 +57,7 @@ async function ensureAudio() {
     const mute = ctx.createGain(); mute.gain.value = 0;     // keep the graph pulling without echoing the mic
     src.connect(node); node.connect(mute); mute.connect(ctx.destination);
     audio.gain = ctx.createGain(); audio.gain.gain.value = 1; audio.gain.connect(ctx.destination);
+    audio.an = ctx.createAnalyser(); audio.an.fftSize = 2048; audio.gain.connect(audio.an);   // confirms the beep was generated
     audio.node = node; audio.sr = ctx.sampleRate;
     node.port.onmessage = (e) => onWorklet(e.data);
     node.port.postMessage({ type: 'params', params: detParams() });
@@ -58,24 +69,42 @@ async function ensureAudio() {
 }
 
 function latencyEstimate() {
-  const c = audio.ctx; let lat = (c.outputLatency || 0) + (c.baseLatency || 0);
-  try { const s = audio.stream.getAudioTracks()[0].getSettings(); if (s.latency) lat += s.latency; } catch {}
-  return lat;
+  const c = audio.ctx; let inp = 0;
+  try { const s = audio.stream.getAudioTracks()[0].getSettings(); if (s.latency) inp = s.latency; } catch {}
+  audio.reportedLatency = { output: (c.outputLatency || 0) * 1000, base: (c.baseLatency || 0) * 1000, input: inp * 1000 };
+  return (c.outputLatency || 0) + (c.baseLatency || 0) + inp;
+}
+const sessType = () => (navigator.audioSession ? navigator.audioSession.type : 'n/a (no audioSession API)');
+function setSession(mode) {
+  if (!navigator.audioSession || mode === 'default') return;
+  try { navigator.audioSession.type = mode; } catch (e) { console.warn('audioSession', e); }
+}
+// Alternative beep path: an <audio> element playing a generated WAV (iOS may route/process it differently).
+let beepEl = null, beepElKey = '';
+function primeBeepElement() {
+  const key = S.hz + '/' + S.blen; if (!beepEl) beepEl = new Audio();
+  if (key !== beepElKey) {
+    const sr = 48000, n = Math.round(S.blen / 1000 * sr), x = new Float32Array(n), r = Math.round(0.003 * sr);
+    for (let i = 0; i < n; i++) x[i] = BEEP_GAIN * Math.sin(2 * Math.PI * S.hz * i / sr) * Math.min(1, i / r, (n - i) / r);
+    beepEl.src = URL.createObjectURL(wavBlob(x, sr)); beepElKey = key;
+  }
+  beepEl.muted = true; const p = beepEl.play(); if (p) p.then(() => { beepEl.pause(); beepEl.currentTime = 0; beepEl.muted = false; }).catch(() => { beepEl.muted = false; });
 }
 
 function scheduleBeep(at, ms) {
   const c = audio.ctx, o = c.createOscillator(), g = c.createGain();
   o.type = 'sine'; o.frequency.value = S.hz;
   const d = ms / 1000;
-  g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(0.9, at + 0.003);
-  g.gain.setValueAtTime(0.9, at + d - 0.01); g.gain.linearRampToValueAtTime(0, at + d);
+  g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(BEEP_GAIN, at + 0.003);
+  g.gain.setValueAtTime(BEEP_GAIN, at + d - 0.01); g.gain.linearRampToValueAtTime(0, at + d);
   o.connect(g); g.connect(audio.gain); o.start(at); o.stop(at + d + 0.02);
   return o;
 }
 
 // ---------- timer state machine ----------
 // idle -> standby (waiting for random beep) -> live (listening) -> done (review)
-const T = { state: 'idle', beepAt: 0, pending: [], raf: 0, beepFrame: null, acoustic: false, shots: [], oscs: [], lastActivity: 0, delay: 0, autoTimer: null, wakeLock: null };
+const BEEP_GAIN = 0.9;
+const T = { beepGain: BEEP_GAIN, beepOut: 'webaudio', genPeak: null, sessAtSchedule: '', sessAtBeep: '', state: 'idle', beepAt: 0, pending: [], raf: 0, beepFrame: null, acoustic: false, shots: [], oscs: [], lastActivity: 0, delay: 0, autoTimer: null, wakeLock: null };
 
 async function onMain() {
   if (T.state === 'idle' || T.state === 'done') return start();
@@ -95,7 +124,13 @@ async function start() {
   const lo = Math.min(S.dmin, S.dmax), hi = Math.max(S.dmin, S.dmax);
   T.delay = lo + Math.random() * (hi - lo);
   const beepAt = audio.ctx.currentTime + Math.max(0.15, T.delay);
-  T.oscs = [scheduleBeep(beepAt, S.blen)];
+  T.beepOut = S.beepOut; T.genPeak = null; T.sessAtSchedule = sessType(); T.sessAtBeep = '';
+  clearTimeout(T.elTimer);
+  if (S.beepOut === 'element') {
+    primeBeepElement(); T.oscs = [];
+    T.elTimer = setTimeout(() => { beepEl.currentTime = 0; beepEl.play().catch((e) => console.warn('beep element', e)); },
+      Math.max(0, (beepAt - audio.ctx.currentTime) * 1000));
+  } else T.oscs = [scheduleBeep(beepAt, S.blen)];
   const parAt = [];
   if (S.par > 0) { parAt.push(beepAt + S.par); T.oscs.push(scheduleBeep(beepAt + S.par, S.blen)); }
   audio.node.port.postMessage({ type: 'params', params: detParams() });
@@ -114,11 +149,16 @@ function tick() {
   if (T.state === 'standby' && now >= T.beepAt) goLive();
   if (T.state === 'live') {
     if (!liveShots().length) $('big').textContent = Math.max(0, now - T.beepAt).toFixed(2) + '0';
+    if (T.beepOut === 'webaudio' && now - T.beepAt < S.blen / 1000 + 0.1) {      // measure the generated beep signal
+      const buf = audio.tdBuf || (audio.tdBuf = new Float32Array(audio.an.fftSize)); audio.an.getFloatTimeDomainData(buf);
+      let pk = 0; for (const v of buf) pk = Math.max(pk, Math.abs(v)); T.genPeak = Math.max(T.genPeak || 0, pk);
+    }
   }
   if (T.state === 'standby' || T.state === 'live') T.raf = requestAnimationFrame(tick);
 }
 
 function goLive() {
+  T.sessAtBeep = sessType();
   T.state = 'live'; T.lastActivity = performance.now();
   setStatus('GO', 'live'); setMain('STOP', 'stop');
   clearInterval(T.autoTimer);
@@ -138,6 +178,7 @@ function addShot(frame, db) {
 }
 
 function cancel() {
+  clearTimeout(T.elTimer); if (beepEl) beepEl.pause();
   for (const o of T.oscs) { try { o.stop(); } catch {} }
   audio.node.port.postMessage({ type: 'disarm' });
   cancelAnimationFrame(T.raf); $('big').textContent = '0.000';
@@ -172,47 +213,96 @@ function onWorklet(m) {
 }
 
 // ---------- beep diagnostics ----------
-// Re-scans the raw mic audio captured around the start beep and reports where (and how loud) the beep tone was.
+// Re-analyses the raw mic audio captured from START until 2 s after the beep and reports what the mic heard.
 let lastDiag = null;
-function goertzelScan(x, sr, hz) {
-  const N = Math.round(sr / 1000), coef = 2 * Math.cos(2 * Math.PI * hz / sr), out = [];
-  for (let b = 0; b + N <= x.length; b += N) {
-    let s1 = 0, s2 = 0, en = 0;
-    for (let k = 0; k < N; k++) { const v = x[b + k], s0 = v + coef * s1 - s2; s2 = s1; s1 = s0; en += v * v; }
-    const pw = s1 * s1 + s2 * s2 - coef * s1 * s2;
-    out.push({ b, ratio: pw / (N / 2 * en + 1e-20), db: 10 * Math.log10(en / N + 1e-14), tone: 10 * Math.log10(pw / (N * N / 4) + 1e-14) });
+function highpass200(x, sr) {
+  const w0 = 2 * Math.PI * 200 / sr, al = Math.sin(w0) / (2 * Math.SQRT1_2), c = Math.cos(w0), a0 = 1 + al;
+  const b0 = (1 + c) / 2 / a0, b1 = -(1 + c) / a0, a1 = -2 * c / a0, a2 = (1 - al) / a0, y = new Float32Array(x.length);
+  let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  for (let i = 0; i < x.length; i++) { const v = b0 * x[i] + b1 * x1 + b0 * x2 - a1 * y1 - a2 * y2; x2 = x1; x1 = x[i]; y2 = y1; y1 = v; y[i] = v; }
+  return y;
+}
+const dbs = (p) => 10 * Math.log10(p + 1e-20);
+function median(a) { const b = a.slice().sort((u, v) => u - v); return b.length ? b[b.length >> 1] : -120; }
+// Level in the beep's band (±50 Hz, 10 ms Goertzel blocks) over the whole recording.
+function bandScan(y, sr, hz) {
+  const N = Math.round(sr / 100), g = (b, f) => { const c = 2 * Math.cos(2 * Math.PI * f / sr); let s1 = 0, s2 = 0;
+    for (let k = 0; k < N; k++) { const s0 = y[b + k] + c * s1 - s2; s2 = s1; s1 = s0; } return dbs((s1 * s1 + s2 * s2 - c * s1 * s2) / (N * N / 4)); };
+  const out = [];
+  for (let b = 0; b + N <= y.length; b += N) {
+    const db = g(b, hz), nb = Math.max(g(b, hz - 600), g(b, hz - 300), g(b, hz + 300), g(b, hz + 600));
+    out.push({ b, db, contrast: db - nb });
   }
   return out;
 }
+// Strongest STEADY tone anywhere in 300–8000 Hz (same FFT bin wins ≥3 frames in a row, ≥20 dB above that frame's median).
+function steadyTone(y, sr) {
+  const n = 4096, hop = 2048, re = new Float64Array(n), im = new Float64Array(n), lo = Math.ceil(300 * n / sr), hi = Math.floor(8000 * n / sr);
+  const frames = [];
+  for (let s = 0; s + n <= y.length; s += hop) {
+    for (let k = 0; k < n; k++) { re[k] = y[s + k] * (0.5 - 0.5 * Math.cos(2 * Math.PI * k / (n - 1))); im[k] = 0; }
+    ShotDetector.fft(re, im);
+    let bk = lo, bp = 0; const ps = [];
+    for (let k = lo; k <= hi; k++) { const p = re[k] * re[k] + im[k] * im[k]; ps.push(p); if (p > bp) { bp = p; bk = k; } }
+    frames.push({ s, bk, db: dbs(bp / (n * n / 16)), prom: dbs(bp) - dbs(median(ps)) });
+  }
+  let best = null;
+  for (let i = 2; i < frames.length; i++) {
+    const f = frames[i], ok = [frames[i - 1], frames[i - 2]].every((g) => Math.abs(g.bk - f.bk) <= 1 && g.prom > 20) && f.prom > 20;
+    if (ok && (!best || f.db > best.db)) best = { hz: f.bk * sr / n, db: f.db, s: f.s };
+  }
+  return best;
+}
 function onBeepDiag(m) {
-  const sr = m.sampleRate, sc = goertzelScan(m.buf, sr, m.hz);
-  // a beep = at least 10 ms in a row of pure tone (a gunshot can look tonal for a block or two, never 10)
-  const tonal = []; let run = [];
-  for (const c of sc.concat([{ ratio: 0 }])) { if (c.ratio > 0.3) run.push(c); else { if (run.length >= 10) tonal.push(...run); run = []; } }
-  const best = (tonal.length ? tonal : sc).reduce((a, c) => (c.tone > a.tone ? c : a), tonal[0] || sc[0]);
-  const pure = sc.reduce((a, c) => (c.ratio > a.ratio ? c : a), sc[0]);
-  const pre = sc.filter((c) => c.b < 0.25 * sr);
-  const noise = pre.length ? pre.map((c) => c.db).sort((a, b) => a - b)[pre.length >> 1] : -99;
-  const loud = Math.max(...sc.map((c) => c.db));
+  const sr = m.sampleRate, y = highpass200(m.buf, sr), lat = m.latency;
+  const band = bandScan(y, sr, m.hz);
+  const expRel = m.exp - m.from;                                   // expected beep position in the recording (samples)
+  const pre = band.filter((c) => c.b < expRel - 0.2 * sr).map((c) => c.db);
+  const bandBg = pre.length ? median(pre) : median(band.map((c) => c.db));
+  const win = band.filter((c) => c.b >= expRel - 0.15 * sr && c.b <= expRel + 1.0 * sr);
+  const tonalWin = win.filter((c) => c.contrast > 10);         // blocks where the band beats its neighbours (tone-like)
+  const bp = (tonalWin.length ? tonalWin : win).reduce((a, c) => (c.db > a.db ? c : a), (tonalWin[0] || win[0]) || { db: -120, b: 0, contrast: 0 });
+  const tone = steadyTone(y, sr);
+  let rms = 0; for (let i = 0; i < y.length; i++) rms += y[i] * y[i];
+  const trk = audio.trackInfo || {};
   lastDiag = {
     at: new Date().toLocaleTimeString(), heard: m.acoustic, sr, hz: m.hz,
-    toneFound: tonal.length > 0, bestPurity: pure.ratio, toneDb: best.tone, toneRatio: best.ratio, toneAtMs: ((m.from + best.b) - m.exp) / sr * 1000,
-    noiseDb: noise, loudDb: loud, latencyMs: m.latency * 1000, ua: navigator.userAgent.replace(/^Mozilla\/5.0 /, ''),
-    audioMode: S.audioMode, audioSession: navigator.audioSession ? navigator.audioSession.type : 'n/a',
-    raw: m.buf,
+    bandPeakDb: bp.db, bandContrast: bp.contrast, bandTonal: tonalWin.length > 0, bandBgDb: bandBg, bandSnr: bp.db - bandBg, bandAtMs: (bp.b - expRel) / sr * 1000,
+    tone, levelDb: dbs(rms / y.length),
+    measuredLatencyMs: m.acoustic ? (lat + (m.found - m.exp) / sr) * 1000 : null,
+    reported: audio.reportedLatency || {},
+    recLen: m.buf.length / sr, beepOffset: (expRel - lat * sr) / sr, beepOffsetWithLat: expRel / sr,
+    gain: T.beepGain, out: T.beepOut, genPeak: T.genPeak, sessAtSchedule: T.sessAtSchedule, sessAtBeep: T.sessAtBeep,
+    trk, ua: navigator.userAgent.replace(/^Mozilla\/5.0 /, ''), raw: m.buf,
   };
   renderDiag();
-  if (!m.acoustic) $('beepinfo').textContent = tonal.length ? `Beep not heard by mic — faint beep tone at ${best.tone.toFixed(0)} dB (noise ${noise.toFixed(0)} dB). Settings › Diagnostics` : 'Beep not heard by mic — no beep tone in the recording at all. Settings › Diagnostics';
+  if (!m.acoustic) $('beepinfo').textContent = lastDiag.bandTonal ? `Beep not heard by mic — only a faint tone, ${lastDiag.bandSnr.toFixed(0)} dB above background. Settings › Diagnostics` : 'Beep not heard by mic — no beep tone in the recording. Settings › Diagnostics';
 }
 function renderDiag() {
   const d = lastDiag, el = $('diag'); if (!el) return;
   if (!d) { el.textContent = 'Run one string on the Timer tab, then come back here.'; return; }
-  el.textContent =
-    `Last string ${d.at}: beep ${d.heard ? 'HEARD by mic ✓' : 'NOT heard ✗'}\n` +
-    (d.toneFound ? `Beep tone peak: ${d.toneDb.toFixed(1)} dB, purity ${d.toneRatio.toFixed(2)}, at ${d.toneAtMs >= 0 ? '+' : ''}${d.toneAtMs.toFixed(0)} ms vs expected\n` : `No beep tone found (best purity ${d.bestPurity.toFixed(2)})\n`) +
-    `Background noise: ${d.noiseDb.toFixed(1)} dB   loudest sound: ${d.loudDb.toFixed(1)} dB\n` +
-    `Latency estimate: ${d.latencyMs.toFixed(0)} ms   sample rate: ${d.sr}\n` +
-    `Audio mode: ${d.audioMode} (session: ${d.audioSession})\n${d.ua}`;
+  const f1 = (v, u = '') => (v == null || !isFinite(v)) ? 'n/a' : v.toFixed(1) + u;
+  const yn = (v) => v === undefined ? '?' : String(v);
+  const t = d.trk, r = d.reported;
+  el.textContent = [
+    `Last string ${d.at}: beep ${d.heard ? 'HEARD by mic ✓' : 'NOT heard ✗'}`,
+    `— Beep played —`,
+    `Pitch ${d.hz} Hz · gain ${d.gain} · output ${d.out} · generated peak ${d.genPeak == null ? 'n/a' : d.genPeak.toFixed(2)}`,
+    `Session at schedule: ${d.sessAtSchedule} · at beep: ${d.sessAtBeep}`,
+    `Beep at ${d.beepOffset.toFixed(3)} s into the ${d.recLen.toFixed(2)} s recording (${d.beepOffsetWithLat.toFixed(3)} s incl. latency guess)`,
+    `— What the mic heard (after 200 Hz high-pass) —`,
+    `Beep band ${d.hz}±50 Hz: ${d.bandTonal ? 'tone-like' : 'NO tone (loudest non-tonal)'} peak ${f1(d.bandPeakDb, ' dB')} at ${d.bandAtMs >= 0 ? '+' : ''}${d.bandAtMs.toFixed(0)} ms`,
+    `   SNR vs band background ${f1(d.bandSnr, ' dB')} (need 15) · above neighbour bands ${f1(d.bandContrast, ' dB')} (need 10)`,
+    `Strongest steady tone: ${d.tone ? `${d.tone.hz.toFixed(0)} Hz at ${d.tone.db.toFixed(1)} dB, ${(d.tone.s / d.sr).toFixed(2)} s in` : 'none'}`,
+    `Overall level ${f1(d.levelDb, ' dB')}`,
+    `Measured latency: ${d.measuredLatencyMs == null ? 'n/a (beep not detected)' : d.measuredLatencyMs.toFixed(1) + ' ms'}`,
+    `Reported by browser: output ${f1(r.output, ' ms')} · base ${f1(r.base, ' ms')} · input ${f1(r.input, ' ms')}`,
+    `— Microphone (applied by iOS) —`,
+    `echoCancellation ${yn(t.ec)} · noiseSuppression ${yn(t.ns)} · autoGainControl ${yn(t.agc)}`,
+    `requested all false · first grant: EC ${yn(t.ec0)} NS ${yn(t.ns0)} AGC ${yn(t.agc0)} · applyConstraints: ${t.apply || 'not needed'}`,
+    `track rate ${yn(t.sampleRate)} · channels ${yn(t.channelCount)} · context rate ${d.sr} · EC options ${yn(t.ecCaps)}`,
+    d.ua,
+  ].join('\n');
 }
 function wavBlob(x, sr) {
   const b = new ArrayBuffer(44 + x.length * 2), v = new DataView(b), w = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
@@ -361,6 +451,7 @@ function bindSettings() {
   const am = $('set-audiomode'); am.value = S.audioMode;
   am.addEventListener('change', () => { S.audioMode = am.value; saveSettings(); $('audiomode-note').textContent = 'Close and reopen the app for this to take effect.'; });
   $('btn-diag-share').onclick = shareDiag; renderDiag();
+  const bo = $('set-beepout'); bo.value = S.beepOut; bo.addEventListener('change', () => { S.beepOut = bo.value; saveSettings(); });
   $('build').textContent = `Build ${BUILD}`;
 }
 

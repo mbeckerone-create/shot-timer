@@ -5,9 +5,10 @@ function wav(p){const b=fs.readFileSync(p),o=b.indexOf('data')+8,n=(b.length-o)>
 const clip = wav(process.argv[2] || '/home/user/data/audio/IMG_5090.wav');
 const CLIP_FROM = 66.5, CLIP_TO = 69.3, LAT = 0.090, BEEP_AT = 1.5, PLACE = 2.6, HZ = 2400, BLEN = 300;
 const N = Math.round(6 * SR), x = new Float32Array(N);
-for (let i = 0; i < N; i++) x[i] = (Math.random() - .5) * 0.002;
+const RUMBLE = +(process.env.RUMBLE || 0), BEEP_AMP = +(process.env.BEEP_AMP || 0.3);
+for (let i = 0; i < N; i++) x[i] = (Math.random() - .5) * 0.002 + RUMBLE * (Math.sin(2 * Math.PI * 31 * i / SR) + 0.6 * Math.sin(2 * Math.PI * 47 * i / SR + 1));
 const b0 = Math.round((BEEP_AT + LAT) * SR);
-for (let i = 0; i < BLEN / 1000 * SR; i++) x[b0 + i] += 0.3 * Math.sin(2 * Math.PI * HZ * i / SR);
+for (let i = 0; i < BLEN / 1000 * SR; i++) x[b0 + i] += BEEP_AMP * Math.sin(2 * Math.PI * HZ * i / SR);
 const seg = clip.subarray(Math.round(CLIP_FROM * SR), Math.round(CLIP_TO * SR)), p0 = Math.round(PLACE * SR);
 for (let i = 0; i < seg.length; i++) x[p0 + i] += seg[i];
 // reference: python detector times inside the clip

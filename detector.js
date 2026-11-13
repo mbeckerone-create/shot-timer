@@ -133,37 +133,65 @@
       }
     }
   }
-  /* BeepFinder — finds the onset of our own start beep in the mic stream (Goertzel tone detector).
+  /* BeepFinder — finds the onset of our own start beep in the mic stream.
    * Timing the string from the beep *as heard by the mic* cancels the phone's output+input latency,
-   * because shots and beep then share one clock: input sample frames. */
+   * because shots and beep then share one clock: input sample frames.
+   * Signal is high-passed at 200 Hz (rumble/handling can't win), then a Goertzel filter over 10 ms blocks
+   * listens only within about ±50 Hz of the beep pitch. Three tonal blocks in a row = beep; the onset is then
+   * refined to the first sample of the tone. */
   class BeepFinder {
     constructor(sampleRate, hz) {
-      this.sr = sampleRate; this.N = Math.max(8, Math.round(sampleRate / 1000));
+      this.sr = sampleRate; this.hz = hz; this.N = Math.round(sampleRate / 100);    // 10 ms blocks ≈ 100 Hz wide bin
       this.coef = 2 * Math.cos(2 * Math.PI * hz / sampleRate);
-      this.from = Infinity; this.to = -Infinity; this.found = null; this.run = 0; this.runStart = 0;
+      // neighbour bands: a real tone stands out from them, a broadband bang or rumble does not
+      this.nc = [-600, -300, 300, 600].map((d) => 2 * Math.cos(2 * Math.PI * (hz + d) / sampleRate)); this.ns1 = [0, 0, 0, 0]; this.ns2 = [0, 0, 0, 0];
+      const w0 = 2 * Math.PI * 200 / sampleRate, al = Math.sin(w0) / (2 * Math.SQRT1_2), c = Math.cos(w0), a0 = 1 + al;
+      this.hb = [(1 + c) / 2 / a0, -(1 + c) / a0, (1 + c) / 2 / a0, -2 * c / a0, (1 - al) / a0];
+      this.hx1 = this.hx2 = this.hy1 = this.hy2 = 0;
+      // narrow band-pass at the beep pitch (Q=4), used only to pin the onset; its group delay is subtracted
+      const Q = 4, w1 = 2 * Math.PI * hz / sampleRate, al1 = Math.sin(w1) / (2 * Q), c1 = Math.cos(w1), a01 = 1 + al1;
+      this.bb = [al1 / a01, 0, -al1 / a01, -2 * c1 / a01, (1 - al1) / a01];
+      this.bx1 = this.bx2 = this.by1 = this.by2 = 0; this.bpDelay = Math.round(2 * Q / w1);   // samples
+      this.bring = new Float32Array(8192);
+      this.from = Infinity; this.to = -Infinity; this.found = null; this.foundDb = null; this.run = 0; this.runStart = 0;
       this.s1 = this.s2 = this.en = 0; this.n = 0; this.blockStart = 0;
-      this.ring = new Float32Array(1024); this.f = 0;
+      this.ring = new Float32Array(8192); this.best = { ratio: 0, toneDb: -120, frame: 0 }; this.bandDb = null;
     }
     window(fromFrame, toFrame) { this.from = fromFrame; this.to = toFrame; this.found = null; this.run = 0; }
-    get active() { return this.found === null && this.to > this.from; }
     process(buf, startFrame) {
+      const [b0, b1, b2, a1, a2] = this.hb, N = this.N;
       for (let k = 0; k < buf.length; k++) {
-        const f = startFrame + k;
+        const f = startFrame + k, xin = buf[k];
+        const x = b0 * xin + b1 * this.hx1 + b2 * this.hx2 - a1 * this.hy1 - a2 * this.hy2;
+        this.hx2 = this.hx1; this.hx1 = xin; this.hy2 = this.hy1; this.hy1 = x;
+        this.ring[f & 8191] = x;
+        const [c0, c1, c2, d1, d2] = this.bb, yb = c0 * xin + c1 * this.bx1 + c2 * this.bx2 - d1 * this.by1 - d2 * this.by2;
+        this.bx2 = this.bx1; this.bx1 = xin; this.by2 = this.by1; this.by1 = yb; this.bring[f & 8191] = yb;
         if (this.n === 0) this.blockStart = f;
-        const x = buf[k]; this.ring[f & 1023] = x; this.f = f;
         const s0 = x + this.coef * this.s1 - this.s2; this.s2 = this.s1; this.s1 = s0; this.en += x * x;
-        if (++this.n === this.N) {
+        for (let j = 0; j < 4; j++) { const t = x + this.nc[j] * this.ns1[j] - this.ns2[j]; this.ns2[j] = this.ns1[j]; this.ns1[j] = t; }
+        if (++this.n === N) {
           const pw = this.s1 * this.s1 + this.s2 * this.s2 - this.coef * this.s1 * this.s2;
-          const ratio = pw / (this.N / 2 * this.en + 1e-20), db = 10 * Math.log10(this.en / this.N + 1e-14);
+          const ratio = pw / (N / 2 * this.en + 1e-20);                 // 1.0 = all energy is our tone
+          const toneDb = 10 * Math.log10(pw / (N * N / 4) + 1e-14);      // level of the tone itself (dBFS, ~amplitude²)
           const inWin = this.blockStart >= this.from && this.blockStart <= this.to;
-          if (this.found === null && inWin && ratio > 0.3 && db > -72) {
+          let nb = -200;
+          for (let j = 0; j < 4; j++) { const a = this.ns1[j], b = this.ns2[j]; nb = Math.max(nb, 10 * Math.log10((a * a + b * b - this.nc[j] * a * b) / (N * N / 4) + 1e-14)); this.ns1[j] = this.ns2[j] = 0; }
+          const contrast = toneDb - nb;                                 // dB above the loudest neighbour band
+          if (this.bandDb === null) this.bandDb = toneDb;
+          const snr = toneDb - this.bandDb;                            // tone vs this band's own background
+          if (inWin && toneDb > this.best.toneDb) this.best = { ratio, toneDb, snr, contrast, frame: this.blockStart };
+          if (this.found === null && inWin && snr > 15 && contrast > 10 && toneDb > -100) {
             if (this.run++ === 0) this.runStart = this.blockStart;
             if (this.run >= 3) {          // refine to the first sample of the tone (sample-accurate)
-              let amp = 0; for (let q = f - this.N + 1; q <= f; q++) amp = Math.max(amp, Math.abs(this.ring[q & 1023]));
-              let on = this.runStart; for (let q = this.runStart - this.N; q <= f; q++) if (Math.abs(this.ring[q & 1023]) > 0.3 * amp) { on = q; break; }
-              this.found = on;
+              let amp = 0; for (let q = f - N + 1; q <= f; q++) amp = Math.max(amp, Math.abs(this.bring[q & 8191]));
+              let on = this.runStart; for (let q = this.runStart - N; q <= f; q++) if (Math.abs(this.bring[q & 8191]) > 0.25 * amp) { on = q; break; }
+              this.found = on - this.bpDelay; this.foundDb = toneDb;
             }
-          } else this.run = 0;
+          } else {
+            this.run = 0;
+            if (this.found === null) this.bandDb += 0.05 * (Math.min(toneDb, this.bandDb + 6) - this.bandDb);   // track band background
+          }
           this.s1 = this.s2 = this.en = 0; this.n = 0;
         }
       }
@@ -171,6 +199,7 @@
     }
   }
   ShotDetector.BeepFinder = BeepFinder;
+  ShotDetector.fft = fft;
   ShotDetector.DEFAULTS = DEFAULTS;
   // Sensitivity 1..10 -> absolute shot threshold (10 = most sensitive)
   ShotDetector.sensitivityToDb = (s) => -14 - (s - 1) * 3;   // 1:-14dB … 5:-26dB … 10:-41dB
