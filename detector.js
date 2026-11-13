@@ -12,7 +12,7 @@
 (function (root) {
   const DEFAULTS = {
     hpHz: 2000, armDb: 15, shotDb: -26, hpFracDb: -9, confirmMs: 70, lockMs: 100,
-    floorMs: 300, echoMs: 180, echoDb: 6, backMs: 60, backDb: 20, tonal: 0.6, tonalGapMs: 60,
+    notchHz: null, floorMs: 300, echoMs: 180, echoDb: 6, backMs: 60, backDb: 20, tonal: 0.6, tonalGapMs: 60,
   };
   const RING = 4096;            // blocks of history (~4 s)
   const SRING = 1 << 15;        // samples of HP history (~0.68 s @48k)
@@ -36,7 +36,7 @@
     constructor(sampleRate, params = {}) {
       this.sr = sampleRate; this.p = Object.assign({}, DEFAULTS, params);
       this.B = Math.max(1, Math.round(sampleRate / 1000));
-      this._biquad(this.p.hpHz);
+      this._biquad(this.p.hpHz); this._notch(this.p.notchHz);
       this.x1 = this.x2 = this.y1 = this.y2 = 0;
       this.dh = new Float64Array(RING); this.eh = new Float64Array(RING); this.ef = new Float64Array(RING);
       this.hp = new Float32Array(SRING);
@@ -48,7 +48,15 @@
       this.onShot = null; this.onLevel = null;
       this.peakSinceReport = -120;
     }
-    setParams(p) { Object.assign(this.p, p); if (p.hpHz) this._biquad(p.hpHz); }
+    setParams(p) { Object.assign(this.p, p); if (p.hpHz) this._biquad(p.hpHz); if ('notchHz' in p) this._notch(p.notchHz); }
+    // Narrow notch at our own beep pitch so the detector can keep listening WHILE the beep plays
+    // (a reaction shot can land inside the beep). Off (null) by default.
+    _notch(hz) {
+      if (!hz) { this.nt = null; return; }
+      const w0 = 2 * Math.PI * hz / this.sr, a = Math.sin(w0) / (2 * 3), c = Math.cos(w0), a0 = 1 + a;
+      this.nt = { b0: 1 / a0, b1: -2 * c / a0, b2: 1 / a0, a1: -2 * c / a0, a2: (1 - a) / a0, x1: 0, x2: 0, y1: 0, y2: 0 };
+      this.ntf = Object.assign({}, this.nt);   // same notch on the full-band path (the 'mostly high-frequency' test)
+    }
     reset() { this.shots = []; this.lastShot = null; }
     setBlank(ranges) { this.blankRanges = ranges; }
     _blanked(f) { for (const r of this.blankRanges) if (f >= r[0] && f <= r[1]) return true; return false; }
@@ -61,10 +69,16 @@
       const B = this.B;
       for (let n = 0; n < buf.length; n++) {
         const x = buf[n];
-        const y = this.b0 * x + this.b1 * this.x1 + this.b2 * this.x2 - this.a1 * this.y1 - this.a2 * this.y2;
+        let y = this.b0 * x + this.b1 * this.x1 + this.b2 * this.x2 - this.a1 * this.y1 - this.a2 * this.y2;
         this.x2 = this.x1; this.x1 = x; this.y2 = this.y1; this.y1 = y;
+        const nt = this.nt;
+        let xf = x;
+        if (nt) {
+          const z = nt.b0 * y + nt.b1 * nt.x1 + nt.b2 * nt.x2 - nt.a1 * nt.y1 - nt.a2 * nt.y2; nt.x2 = nt.x1; nt.x1 = y; nt.y2 = nt.y1; nt.y1 = z; y = z;
+          const q = this.ntf, zf = q.b0 * x + q.b1 * q.x1 + q.b2 * q.x2 - q.a1 * q.y1 - q.a2 * q.y2; q.x2 = q.x1; q.x1 = x; q.y2 = q.y1; q.y1 = zf; xf = zf;
+        }
         this.hp[this.frame & (SRING - 1)] = y; this.frame++;
-        this.accH += y * y; this.accF += x * x;
+        this.accH += y * y; this.accF += xf * xf;
         if (++this.accN === B) {
           const k = this.nb & (RING - 1);
           this.eh[k] = this.accH / B + 1e-14; this.ef[k] = this.accF / B + 1e-14;
@@ -186,7 +200,8 @@
             if (this.run >= 3) {          // refine to the first sample of the tone (sample-accurate)
               let amp = 0; for (let q = f - N + 1; q <= f; q++) amp = Math.max(amp, Math.abs(this.bring[q & 8191]));
               let on = this.runStart; for (let q = this.runStart - N; q <= f; q++) if (Math.abs(this.bring[q & 8191]) > 0.25 * amp) { on = q; break; }
-              this.found = on - this.bpDelay; this.foundDb = toneDb;
+              // minus band-pass delay, minus 0.75 ms: the app's beep fades in over 3 ms and the 25% threshold is crossed 0.75 ms in
+              this.found = on - this.bpDelay - Math.round(0.00075 * this.sr); this.foundDb = toneDb;
             }
           } else {
             this.run = 0;

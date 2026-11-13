@@ -22,6 +22,7 @@ class ShotTimerProcessor extends AudioWorkletProcessor {
       const ranges = [[-Infinity, exp + len + pad]];
       for (const t of m.parAt || []) { const e = toInput(t); ranges.push([e - pad, e + len + pad]); }
       this.det.setBlank(ranges);
+      this.det.setParams({ notchHz: m.beepHz });     // detector ignores our beep pitch, so it can hear shots during the beep
       this.beep = new ShotDetector.BeepFinder(sampleRate, m.beepHz);
       this.beep.window(this.det.frame, exp + Math.round(WIN_AFTER * sampleRate));
       this.beepMeta = { exp, len, pad, ranges, hz: m.beepHz, latency: m.latency };
@@ -47,7 +48,10 @@ class ShotTimerProcessor extends AudioWorkletProcessor {
     if (this.beep) {
       const f = this.beep.process(ch, start);
       if (f !== null) {
-        const r = this.beepMeta.ranges; r[0][1] = f + this.beepMeta.len + this.beepMeta.pad;   // re-anchor on the REAL beep
+        // Re-anchor on the REAL beep: only sound before the beep is ignored. The notch removes the beep itself,
+        // so a reaction shot fired while the beep is still sounding still counts.
+        this.det.setBlank([[-Infinity, f]]);
+        this.notchOffAt = f + this.beepMeta.len + Math.round(0.05 * sampleRate);   // notch only while the beep sounds
         if (this.cap) { this.cap.found = f; this.cap.acoustic = true; this.cap.foundDb = this.beep.foundDb; }
         this.bestStats = this.beep.best;
         this.port.postMessage({ type: 'beep', frame: f, acoustic: true, expected: this.beepMeta.exp }); this.beep = null;
@@ -57,6 +61,7 @@ class ShotTimerProcessor extends AudioWorkletProcessor {
         this.port.postMessage({ type: 'beep', frame: this.beepMeta.exp, acoustic: false, expected: this.beepMeta.exp }); this.beep = null;
       }
     }
+    if (this.notchOffAt && start >= this.notchOffAt) { this.det.setParams({ notchHz: null }); this.notchOffAt = 0; }
     this.capture(ch, start);
     this.det.process(ch);
     if (++this.q >= 12) { this.q = 0; this.port.postMessage({ type: 'level', db: this.det.levelAndReset(), frame: this.det.frame }); }

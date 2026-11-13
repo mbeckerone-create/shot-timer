@@ -3,16 +3,17 @@ const fs = require('fs'), path = require('path'), vm = require('vm');
 const SR = 48000;
 function wav(p){const b=fs.readFileSync(p),o=b.indexOf('data')+8,n=(b.length-o)>>1,x=new Float32Array(n);for(let i=0;i<n;i++)x[i]=b.readInt16LE(o+2*i)/32768;return x;}
 const clip = wav(process.argv[2] || '/home/user/data/audio/IMG_5090.wav');
-const CLIP_FROM = 66.5, CLIP_TO = 69.3, LAT = 0.090, BEEP_AT = 1.5, PLACE = 2.6, HZ = 2400, BLEN = 300;
-const N = Math.round(6 * SR), x = new Float32Array(N);
+const CLIP_FROM = 66.5, CLIP_TO = 69.3, LAT = 0.090, BEEP_AT = 1.5, PLACE = process.env.SHOT_AT ? BEEP_AT + LAT + +process.env.SHOT_AT - 0.214 : 2.6, HZ = 2400, BLEN = 300;
+const N = Math.round(7 * SR), x = new Float32Array(N);
 const RUMBLE = +(process.env.RUMBLE || 0), BEEP_AMP = +(process.env.BEEP_AMP || 0.3);
 for (let i = 0; i < N; i++) x[i] = (Math.random() - .5) * 0.002 + RUMBLE * (Math.sin(2 * Math.PI * 31 * i / SR) + 0.6 * Math.sin(2 * Math.PI * 47 * i / SR + 1));
 const b0 = Math.round((BEEP_AT + LAT) * SR);
-for (let i = 0; i < BLEN / 1000 * SR; i++) x[b0 + i] += BEEP_AMP * Math.sin(2 * Math.PI * HZ * i / SR);
+const BN = BLEN / 1000 * SR, RAMP = 0.003 * SR;   // same 3 ms ramps as the app's beep
+for (let i = 0; i < BN; i++) x[b0 + i] += BEEP_AMP * Math.min(1, i / RAMP, (BN - i) / RAMP) * Math.sin(2 * Math.PI * HZ * i / SR);
 const seg = clip.subarray(Math.round(CLIP_FROM * SR), Math.round(CLIP_TO * SR)), p0 = Math.round(PLACE * SR);
 for (let i = 0; i < seg.length; i++) x[p0 + i] += seg[i];
 // reference: python detector times inside the clip
-const ref = JSON.parse(fs.readFileSync('/home/user/data/analysis/detections_v2.json'))['IMG_5090'].map(s => s.t).filter(t => t > CLIP_FROM && t < CLIP_TO);
+const ref0 = JSON.parse(fs.readFileSync('/home/user/data/analysis/detections_v2.json'))['IMG_5090'].map(s => s.t).filter(t => t > CLIP_FROM && t < CLIP_TO); const ref = ref0;
 const expected = ref.map(t => t - CLIP_FROM + PLACE - (BEEP_AT + LAT));
 // worklet global scope
 const msgs = []; let proc;
