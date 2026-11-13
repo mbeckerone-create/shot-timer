@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.1.0';
+const BUILD = 'v0.1.1';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -74,7 +74,7 @@ function scheduleBeep(at, ms) {
 
 // ---------- timer state machine ----------
 // idle -> standby (waiting for random beep) -> live (listening) -> done (review)
-const T = { state: 'idle', beepFrame: null, acoustic: false, shots: [], oscs: [], lastActivity: 0, delay: 0, autoTimer: null, wakeLock: null };
+const T = { state: 'idle', beepAt: 0, pending: [], raf: 0, beepFrame: null, acoustic: false, shots: [], oscs: [], lastActivity: 0, delay: 0, autoTimer: null, wakeLock: null };
 
 async function onMain() {
   if (T.state === 'idle' || T.state === 'done') return start();
@@ -90,7 +90,7 @@ async function start() {
   }
   if (audio.ctx.state !== 'running') await audio.ctx.resume();
   if (T.state === 'done' && T.shots.length && !T.saved) autoSaveIfNeeded();
-  T.shots = []; T.beepFrame = null; T.saved = false; renderShots(); renderStats();
+  T.shots = []; T.pending = []; T.beepFrame = null; T.saved = false; renderShots(); renderStats();
   const lo = Math.min(S.dmin, S.dmax), hi = Math.max(S.dmin, S.dmax);
   T.delay = lo + Math.random() * (hi - lo);
   const beepAt = audio.ctx.currentTime + Math.max(0.15, T.delay);
@@ -102,20 +102,52 @@ async function start() {
   T.state = 'standby'; setStatus('Standby', 'standby'); $('big').textContent = '0.000';
   $('beepinfo').textContent = '';
   setMain('CANCEL', 'standby'); $('btn-review').disabled = true;
+  T.beepAt = beepAt; cancelAnimationFrame(T.raf); T.raf = requestAnimationFrame(tick);
   requestWake();
+}
+
+// Drives the screen off the audio clock: flips to GO the instant the beep sounds, then runs the clock.
+function tick() {
+  const c = audio.ctx; if (!c) return;
+  const now = c.currentTime - (c.outputLatency || 0);      // time the speaker is actually playing
+  if (T.state === 'standby' && now >= T.beepAt) goLive();
+  if (T.state === 'live') {
+    if (!liveShots().length) $('big').textContent = Math.max(0, now - T.beepAt).toFixed(2) + '0';
+  }
+  if (T.state === 'standby' || T.state === 'live') T.raf = requestAnimationFrame(tick);
+}
+
+function goLive() {
+  T.state = 'live'; T.lastActivity = performance.now();
+  setStatus('GO', 'live'); setMain('STOP', 'stop');
+  clearInterval(T.autoTimer);
+  T.autoTimer = setInterval(() => {
+    if (T.state !== 'live') return clearInterval(T.autoTimer);
+    const quiet = (performance.now() - T.lastActivity) / 1000;
+    const lim = S.auto > 0 ? S.auto : 120;
+    if (quiet > lim && (T.shots.length || quiet > 30)) stop();
+  }, 250);
+}
+
+function addShot(frame, db) {
+  if (frame <= T.beepFrame) return;
+  T.shots.push({ t: (frame - T.beepFrame) / audio.sr, db, removed: false });
+  T.shots.sort((a, b) => a.t - b.t);
+  T.lastActivity = performance.now(); renderShots(); renderStats();
 }
 
 function cancel() {
   for (const o of T.oscs) { try { o.stop(); } catch {} }
   audio.node.port.postMessage({ type: 'disarm' });
+  cancelAnimationFrame(T.raf); $('big').textContent = '0.000';
   T.state = 'idle'; setStatus('Ready'); setMain('START'); releaseWake();
 }
 
 function stop() {
   audio.node.port.postMessage({ type: 'disarm' });
   for (const o of T.oscs) { try { o.stop(); } catch {} }
-  clearInterval(T.autoTimer);
-  T.state = 'done'; setStatus(T.shots.length ? 'String done' : 'No shots heard');
+  clearInterval(T.autoTimer); cancelAnimationFrame(T.raf);
+  T.state = 'done'; renderStats(); setStatus(T.shots.length ? 'String done' : 'No shots heard');
   setMain('START'); $('btn-review').disabled = !T.shots.length; $('btn-review').textContent = 'Save';
   releaseWake();
   autoSaveIfNeeded();
@@ -123,29 +155,22 @@ function stop() {
 
 function onWorklet(m) {
   if (m.type === 'level') return drawMeter(m.db);
-  if (m.type === 'beep' && T.state === 'standby') {
-    T.beepFrame = m.frame; T.acoustic = m.acoustic; T.state = 'live'; T.lastActivity = performance.now();
-    setStatus('Shooter ready… go', 'live'); setMain('STOP', 'stop');
+  if (m.type === 'beep' && (T.state === 'standby' || T.state === 'live') && T.beepFrame == null) {
+    // The worklet located the beep in the mic stream: that is t=0 for every shot.
+    T.beepFrame = m.frame; T.acoustic = m.acoustic;
     const off = ((m.frame - m.expected) / audio.sr * 1000).toFixed(0);
     $('beepinfo').textContent = m.acoustic ? `Start beep heard by mic (latency ${off} ms, removed)` : 'Beep not heard by mic — using estimated timing';
-    clearInterval(T.autoTimer);
-    T.autoTimer = setInterval(() => {
-      if (T.state !== 'live') return clearInterval(T.autoTimer);
-      const quiet = (performance.now() - T.lastActivity) / 1000;
-      const lim = S.auto > 0 ? S.auto : 120;
-      if (quiet > lim && (T.shots.length || quiet > 30)) stop();
-    }, 250);
+    const p = T.pending; T.pending = []; for (const q of p) addShot(q.frame, q.db);
     return;
   }
-  if (m.type === 'shot' && T.state === 'live' && T.beepFrame != null && m.frame > T.beepFrame) {
-    T.shots.push({ t: (m.frame - T.beepFrame) / audio.sr, db: m.peakDb, removed: false });
-    T.lastActivity = performance.now();
-    renderShots(); renderStats();
+  if (m.type === 'shot' && T.state === 'live') {
+    if (T.beepFrame == null) T.pending.push({ frame: m.frame, db: m.peakDb });   // beep timing not confirmed yet
+    else addShot(m.frame, m.peakDb);
   }
 }
 
 // ---------- rendering ----------
-function setStatus(txt, cls) { const s = $('status'); s.textContent = txt; s.className = 'status' + (cls ? ' ' + cls : ''); }
+function setStatus(txt, cls) { const s = $('status'); s.textContent = txt; s.className = 'status' + (cls ? ' ' + cls : ''); document.querySelector('.readout').classList.toggle('go', cls === 'live'); }
 function setMain(txt, cls) { const b = $('btn-main'); b.textContent = txt; b.className = 'btn primary big-btn' + (cls ? ' ' + cls : ''); }
 
 function liveShots() { return T.shots.filter((s) => !s.removed).map((s) => s.t); }
