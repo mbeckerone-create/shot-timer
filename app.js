@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.1.6';
+const BUILD = 'v0.1.7';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -30,7 +30,25 @@ function detParams() {
 // ---------- audio engine ----------
 const audio = { ctx: null, node: null, stream: null, sr: 48000, ready: null, gain: null };
 
+// The mic can stop delivering audio on iOS (route change, another app, an audio element). A live mic always has
+// some noise; dead silence (exact zeros) for 1.5 s means it stopped. Then tear down and reopen it on the next START.
+let deadSince = 0;
+function micHealth(db) {
+  if (db > -115) { deadSince = 0; return; }   // a working mic never reads below about -100 dB; -120 is exact silence
+  if (!deadSince) deadSince = performance.now();
+  if (performance.now() - deadSince > 1500 && !audio.dead) {
+    audio.dead = true; console.warn('[shot-timer] mic delivering silence — will reopen');
+    if (T.state === 'standby' || T.state === 'live') { cancel(); }
+    setStatus('Mic stopped', 'err'); $('beepinfo').textContent = 'The microphone stopped. Tap START to reconnect it.';
+  }
+}
+async function resetAudio() {
+  try { audio.stream && audio.stream.getTracks().forEach((t) => t.stop()); } catch {}
+  try { audio.ctx && (await audio.ctx.close()); } catch {}
+  Object.assign(audio, { ctx: null, node: null, stream: null, ready: null, dead: false }); deadSince = 0;
+}
 async function ensureAudio() {
+  if (audio.dead || (audio.stream && audio.stream.getAudioTracks().some((t) => t.readyState === 'ended'))) await resetAudio();
   if (audio.ready) return audio.ready;
   audio.ready = (async () => {
     setSession(S.audioMode);
@@ -128,9 +146,9 @@ async function start() {
   const lo = Math.min(S.dmin, S.dmax), hi = Math.max(S.dmin, S.dmax);
   T.delay = lo + Math.random() * (hi - lo);
   const beepAt = audio.ctx.currentTime + Math.max(0.15, T.delay);
-  T.beepOut = S.beepOut; T.genPeak = null; T.sessAtSchedule = sessType(); T.sessAtBeep = '';
+  T.beepOut = 'webaudio'; T.genPeak = null; T.sessAtSchedule = sessType(); T.sessAtBeep = '';
   clearTimeout(T.elTimer);
-  if (S.beepOut === 'element') {
+  if (false) {   // audio-element beep removed: on iOS it could cut off the microphone
     primeBeepElement(); T.oscs = [];
     T.elTimer = setTimeout(() => { beepEl.currentTime = 0; beepEl.play().catch((e) => console.warn('beep element', e)); },
       Math.max(0, (beepAt - audio.ctx.currentTime) * 1000));
@@ -200,7 +218,7 @@ function stop() {
 }
 
 function onWorklet(m) {
-  if (m.type === 'level') return drawMeter(m.db);
+  if (m.type === 'level') { micHealth(m.db); return drawMeter(m.db); }
   if (m.type === 'beepdiag') return onBeepDiag(m);
   if (m.type === 'beep' && (T.state === 'standby' || T.state === 'live') && T.beepFrame == null) {
     // The worklet located the beep in the mic stream: that is t=0 for every shot.
@@ -457,7 +475,6 @@ function bindSettings() {
   const am = $('set-audiomode'); am.value = S.audioMode;
   am.addEventListener('change', () => { S.audioMode = am.value; saveSettings(); $('audiomode-note').textContent = 'Close and reopen the app for this to take effect.'; });
   $('btn-diag-share').onclick = shareDiag; renderDiag();
-  const bo = $('set-beepout'); bo.value = S.beepOut; bo.addEventListener('change', () => { S.beepOut = bo.value; saveSettings(); });
   $('build').textContent = `Build ${BUILD}`;
 }
 
