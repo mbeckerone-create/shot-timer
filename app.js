@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.1.5';
+const BUILD = 'v0.1.6';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -88,7 +88,11 @@ function primeBeepElement() {
     for (let i = 0; i < n; i++) x[i] = BEEP_GAIN * Math.sin(2 * Math.PI * S.hz * i / sr) * Math.min(1, i / r, (n - i) / r);
     beepEl.src = URL.createObjectURL(wavBlob(x, sr)); beepElKey = key;
   }
-  beepEl.muted = true; const p = beepEl.play(); if (p) p.then(() => { beepEl.pause(); beepEl.currentTime = 0; beepEl.muted = false; }).catch(() => { beepEl.muted = false; });
+  // Unlock the element inside the tap with a SILENT clip (iOS ignores .muted, so priming with the beep itself was audible).
+  if (!primeBeepElement.silent) primeBeepElement.silent = URL.createObjectURL(wavBlob(new Float32Array(2400), 48000));
+  const beepUrl = beepEl.src; beepEl.src = primeBeepElement.silent;
+  const p = beepEl.play(); const back = () => { beepEl.pause(); beepEl.src = beepUrl; beepEl.load(); };
+  if (p) p.then(back).catch(back); else back();
 }
 
 function scheduleBeep(at, ms) {
