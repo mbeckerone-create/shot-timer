@@ -2,7 +2,7 @@
  * Frames are counted on the INPUT stream, so beep and shots share one clock.
  * Around each start beep it also captures the raw mic audio and sends it back for diagnostics. */
 const WIN_AFTER = 1.5;   // search for the beep from START until 1.5 s after it was expected (iOS clock mapping can be off by ~1 s)
-const CAP_AFTER = 2.5, CAP_MAX = 16;              // diagnostic capture: from START press until 2 s after the expected beep
+const CAP_AFTER = 5.0, CAP_MAX = 16;              // diagnostic capture: from START press until 5 s after the expected beep
 class ShotTimerProcessor extends AudioWorkletProcessor {
   constructor() {
     super();

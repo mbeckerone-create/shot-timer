@@ -178,7 +178,7 @@ function addShot(frame, db) {
   if (frame <= T.beepFrame) return;
   T.shots.push({ t: (frame - T.beepFrame) / audio.sr, db, removed: false });
   T.shots.sort((a, b) => a.t - b.t);
-  T.lastActivity = performance.now(); renderShots(); renderStats();
+  T.lastActivity = performance.now(); renderShots(); renderStats(); renderDiag();
 }
 
 function cancel() {
@@ -305,6 +305,8 @@ function renderDiag() {
     `echoCancellation ${yn(t.ec)} · noiseSuppression ${yn(t.ns)} · autoGainControl ${yn(t.agc)}`,
     `requested all false · first grant: EC ${yn(t.ec0)} NS ${yn(t.ns0)} AGC ${yn(t.agc0)} · applyConstraints: ${t.apply || 'not needed'}`,
     `track rate ${yn(t.sampleRate)} · channels ${yn(t.channelCount)} · context rate ${d.sr} · EC options ${yn(t.ecCaps)}`,
+    `— Shots the app logged (s after beep) —`,
+    T.shots.length ? T.shots.map((q, i) => `${i + 1}: ${q.t.toFixed(3)} (${q.db.toFixed(1)} dB)${q.removed ? ' removed' : ''}`).join('  ') : 'none',
     d.ua,
   ].join('\n');
 }

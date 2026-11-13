@@ -10,6 +10,7 @@ const msgs = [], ctx = { sampleRate: SR, currentFrame: 0, console,
 vm.createContext(ctx);
 for (const f of ['detector.js', 'worklet.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'), ctx);
 const p = new ctx.Proc(); let armed = false;
+if (process.env.SENS) p.port.onmessage({ data: { type: 'params', params: { shotDb: -14 - (+process.env.SENS - 1) * 3 } } });
 for (let f = 0; f < n; f += 128) {
   ctx.currentFrame = f;
   if (!armed && f >= 0.05 * SR) { p.port.onmessage({ data: { type: 'arm', beepAt: +guess, parAt: [], beepMs: 300, beepHz: +hz, latency: 0 } }); armed = true; }
