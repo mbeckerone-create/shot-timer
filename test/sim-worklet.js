@@ -25,7 +25,7 @@ proc = new ctx.Proc();
 let armed = false;
 for (let f = 0; f < N; f += 128) {
   ctx.currentFrame = f + 512;   // graph clock runs ahead of input frames by an arbitrary offset
-  if (!armed && f >= 0.5 * SR) { proc.port.onmessage({ data: { type: 'arm', beepAt: BEEP_AT + 512 / SR, parAt: [], beepMs: BLEN, beepHz: HZ, latency: 0.02 } }); armed = true; }
+  if (!armed && f >= 0.5 * SR) { proc.port.onmessage({ data: { type: 'arm', beepAt: BEEP_AT + 512 / SR + (+(process.env.MAPERR || 0)), parAt: [], beepMs: BLEN, beepHz: HZ, latency: 0.02 } }); armed = true; }
   proc.process([[x.subarray(f, f + 128)]]);
 }
 const beep = msgs.find(m => m.type === 'beep'), shots = msgs.filter(m => m.type === 'shot').map(m => (m.frame - beep.frame) / SR);

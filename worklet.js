@@ -1,8 +1,8 @@
 /* AudioWorklet: runs ShotDetector + BeepFinder on the raw mic stream, sample-accurate.
  * Frames are counted on the INPUT stream, so beep and shots share one clock.
  * Around each start beep it also captures the raw mic audio and sends it back for diagnostics. */
-const WIN_BEFORE = 0.15, WIN_AFTER = 1.0;          // beep search window around the expected frame (s)
-const CAP_AFTER = 2.0, CAP_MAX = 16;              // diagnostic capture: from START press until 2 s after the expected beep
+const WIN_AFTER = 1.5;   // search for the beep from START until 1.5 s after it was expected (iOS clock mapping can be off by ~1 s)
+const CAP_AFTER = 2.5, CAP_MAX = 16;              // diagnostic capture: from START press until 2 s after the expected beep
 class ShotTimerProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
@@ -23,7 +23,7 @@ class ShotTimerProcessor extends AudioWorkletProcessor {
       for (const t of m.parAt || []) { const e = toInput(t); ranges.push([e - pad, e + len + pad]); }
       this.det.setBlank(ranges);
       this.beep = new ShotDetector.BeepFinder(sampleRate, m.beepHz);
-      this.beep.window(exp - Math.round(WIN_BEFORE * sampleRate), exp + Math.round(WIN_AFTER * sampleRate));
+      this.beep.window(this.det.frame, exp + Math.round(WIN_AFTER * sampleRate));
       this.beepMeta = { exp, len, pad, ranges, hz: m.beepHz, latency: m.latency };
       const c0 = this.det.frame, c1 = Math.min(exp + Math.round(CAP_AFTER * sampleRate), c0 + CAP_MAX * sampleRate);
       this.cap = { from: c0, buf: new Float32Array(Math.max(1, c1 - c0)), sent: false, found: null, acoustic: false };
@@ -40,14 +40,14 @@ class ShotTimerProcessor extends AudioWorkletProcessor {
     }
   }
   process(inputs) {
-    const ch = inputs[0] && inputs[0][0];
-    if (!ch) return true;
-    if (this.offset === null) this.offset = currentFrame - this.det.frame;
+    // If iOS delivers no mic data for a render quantum, count it as silence so the input clock never falls behind.
+    const ch = (inputs[0] && inputs[0][0]) || (this.zeros || (this.zeros = new Float32Array(128)));
+    this.offset = currentFrame - this.det.frame;   // latest mapping graph-clock → input-clock (used when arming)
     const start = this.det.frame;
     if (this.beep) {
       const f = this.beep.process(ch, start);
       if (f !== null) {
-        const r = this.beepMeta.ranges; r[0][1] = Math.max(r[0][1], f + this.beepMeta.len + this.beepMeta.pad);
+        const r = this.beepMeta.ranges; r[0][1] = f + this.beepMeta.len + this.beepMeta.pad;   // re-anchor on the REAL beep
         if (this.cap) { this.cap.found = f; this.cap.acoustic = true; this.cap.foundDb = this.beep.foundDb; }
         this.bestStats = this.beep.best;
         this.port.postMessage({ type: 'beep', frame: f, acoustic: true, expected: this.beepMeta.exp }); this.beep = null;

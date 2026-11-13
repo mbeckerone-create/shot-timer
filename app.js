@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.1.3';
+const BUILD = 'v0.1.4';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -202,7 +202,7 @@ function onWorklet(m) {
     // The worklet located the beep in the mic stream: that is t=0 for every shot.
     T.beepFrame = m.frame; T.acoustic = m.acoustic;
     const off = ((m.frame - m.expected) / audio.sr * 1000).toFixed(0);
-    $('beepinfo').textContent = m.acoustic ? `Start beep heard by mic (latency ${off} ms, removed)` : 'Beep not heard by mic — using estimated timing';
+    $('beepinfo').textContent = m.acoustic ? 'Start beep heard by mic ✓ — timing from the beep' : 'Beep not heard by mic — using estimated timing';
     const p = T.pending; T.pending = []; for (const q of p) addShot(q.frame, q.db);
     return;
   }
@@ -269,7 +269,7 @@ function onBeepDiag(m) {
     at: new Date().toLocaleTimeString(), heard: m.acoustic, sr, hz: m.hz,
     bandPeakDb: bp.db, bandContrast: bp.contrast, bandTonal: tonalWin.length > 0, bandBgDb: bandBg, bandSnr: bp.db - bandBg, bandAtMs: (bp.b - expRel) / sr * 1000,
     tone, levelDb: dbs(rms / y.length),
-    measuredLatencyMs: m.acoustic ? (lat + (m.found - m.exp) / sr) * 1000 : null,
+    vsPredictedMs: m.acoustic ? (m.found - m.exp) / sr * 1000 : null,
     reported: audio.reportedLatency || {},
     recLen: m.buf.length / sr, beepOffset: (expRel - lat * sr) / sr, beepOffsetWithLat: expRel / sr,
     gain: T.beepGain, out: T.beepOut, genPeak: T.genPeak, sessAtSchedule: T.sessAtSchedule, sessAtBeep: T.sessAtBeep,
@@ -295,7 +295,7 @@ function renderDiag() {
     `   SNR vs band background ${f1(d.bandSnr, ' dB')} (need 15) · above neighbour bands ${f1(d.bandContrast, ' dB')} (need 10)`,
     `Strongest steady tone: ${d.tone ? `${d.tone.hz.toFixed(0)} Hz at ${d.tone.db.toFixed(1)} dB, ${(d.tone.s / d.sr).toFixed(2)} s in` : 'none'}`,
     `Overall level ${f1(d.levelDb, ' dB')}`,
-    `Measured latency: ${d.measuredLatencyMs == null ? 'n/a (beep not detected)' : d.measuredLatencyMs.toFixed(1) + ' ms'}`,
+    `Beep found vs predicted: ${d.vsPredictedMs == null ? 'n/a (beep not detected)' : (d.vsPredictedMs >= 0 ? '+' : '') + d.vsPredictedMs.toFixed(1) + ' ms (timing uses the detected beep)'}`,
     `Reported by browser: output ${f1(r.output, ' ms')} · base ${f1(r.base, ' ms')} · input ${f1(r.input, ' ms')}`,
     `— Microphone (applied by iOS) —`,
     `echoCancellation ${yn(t.ec)} · noiseSuppression ${yn(t.ns)} · autoGainControl ${yn(t.agc)}`,
