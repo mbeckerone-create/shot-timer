@@ -50,7 +50,9 @@ class ShotTimerProcessor extends AudioWorkletProcessor {
       if (f !== null) {
         // Re-anchor on the REAL beep: only sound before the beep is ignored. The notch removes the beep itself,
         // so a reaction shot fired while the beep is still sounding still counts.
-        this.det.setBlank([[-Infinity, f]]);
+        // ignore the beep's own onset click (passes the notch, ~-39 dB on an iPhone): first 80 ms. No human reacts
+        // that fast (USPSA/IPSC treat < 0.1 s as anticipation), and the notch lets later reaction shots through.
+        this.det.setBlank([[-Infinity, f + Math.round(0.08 * sampleRate)]]);
         this.notchOffAt = f + this.beepMeta.len + Math.round(0.05 * sampleRate);   // notch only while the beep sounds
         if (this.cap) { this.cap.found = f; this.cap.acoustic = true; this.cap.foundDb = this.beep.foundDb; }
         this.bestStats = this.beep.best;
