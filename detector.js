@@ -89,6 +89,19 @@
       }
       this._scan();
     }
+    // Sound fingerprint of a transient: log energy in 24 log-spaced bands, 2–20 kHz, over the first ~21 ms
+    // (1024 samples from just before the onset). Used by dry-fire mode to tell the trigger click from holster noise.
+    _bands(on) {
+      const n = 1024, re = this._re || (this._re = new Float64Array(n)), im = this._im || (this._im = new Float64Array(n));
+      for (let k = 0; k < n; k++) { re[k] = this.hp[(on - 64 + k) & (SRING - 1)] * (0.5 - 0.5 * Math.cos(2 * Math.PI * k / (n - 1))); im[k] = 0; }
+      fft(re, im);
+      const NB = 24, lo = Math.log(2000), hi = Math.log(Math.min(20000, this.sr / 2 - 100)), e = new Array(NB).fill(1e-12);
+      for (let k = 1; k <= n / 2; k++) {
+        const f = k * this.sr / n; if (f < 2000 || f > Math.exp(hi)) continue;
+        const b = Math.min(NB - 1, Math.floor((Math.log(f) - lo) / (hi - lo) * NB)); e[b] += re[k] * re[k] + im[k] * im[k];
+      }
+      return e.map((v) => +(10 * Math.log10(v)).toFixed(2));
+    }
     // Fraction of 1.5–16 kHz energy in the 3 strongest FFT bins (1024-pt, Hann) around sample c. ~1 for a beep, ~0.16 for a shot.
     _top3(c) {
       const n = 1024, re = this._re || (this._re = new Float64Array(n)), im = this._im || (this._im = new Float64Array(n));
@@ -135,7 +148,7 @@
             const last = this.shots[this.shots.length - 1];
             const isEcho = last && (on - last.frame) < p.echoMs * this.sr / 1000 && pv < last.peakDb - p.echoDb;
             if (!isEcho && !this._blanked(on)) {
-              const shot = { frame: on, peakDb: pv, hpFracDb: hpf };
+              const shot = { frame: on, peakDb: pv, hpFracDb: hpf, bands: this._bands(on) };
               this.shots.push(shot); if (this.onShot) this.onShot(shot);
             }
             continue;

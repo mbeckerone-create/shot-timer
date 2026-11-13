@@ -23,14 +23,17 @@
       <button id="chip-gun" class="chip" aria-label="Gun"><span class="chip-k">Gun</span><span id="lbl-gun">—</span></button>
     </header>
 
+    <div class="seg" id="seg-mode"><button data-mode="range">Range</button><button data-mode="dry">Dry fire</button></div>
+    <div class="seg small dry-only" id="seg-rep"><button data-rep="single">Single rep</button><button data-rep="repeat">Repeat drill</button></div>
+
     <div class="readout">
       <div id="status" class="status">Ready</div>
       <div id="big" class="big">0.000</div>
       <div class="stats">
-        <div><span class="k">Shots</span><span id="s-count" class="v">0</span></div>
-        <div><span class="k">First</span><span id="s-first" class="v">—</span></div>
-        <div><span class="k">Split</span><span id="s-split" class="v">—</span></div>
-        <div><span class="k">Avg split</span><span id="s-avg" class="v">—</span></div>
+        <div><span class="k" id="k-count">Shots</span><span id="s-count" class="v">0</span></div>
+        <div><span class="k" id="k-first">First</span><span id="s-first" class="v">—</span></div>
+        <div><span class="k" id="k-split">Split</span><span id="s-split" class="v">—</span></div>
+        <div><span class="k" id="k-avg">Avg split</span><span id="s-avg" class="v">—</span></div>
       </div>
       <div class="meter" aria-hidden="true"><div id="meter-fill"></div><div id="meter-thr"></div></div>
       <div id="beepinfo" class="hint"></div>
@@ -61,6 +64,14 @@
       <label class="row"><span>Beep pitch (Hz)</span><input id="set-hz" type="number" min="800" max="4000" step="100"></label>
       <label class="row"><span>Beep length (ms)</span><input id="set-blen" type="number" min="100" max="800" step="50"></label>
       <label class="row"><span>Par time (s, 0 = off)</span><input id="set-par" type="number" min="0" max="60" step="0.05"></label>
+
+      <h2>Dry fire</h2>
+      <div class="row col"><span>Trigger click</span><p class="hint" id="click-info"></p><button id="btn-learn2" class="btn ghost small">Teach my trigger click</button></div>
+      <label class="row col"><span>Dry fire sensitivity <b id="lbl-dsens"></b></span><input id="set-dsens" type="range" min="1" max="10" step="1"></label>
+      <label class="row col"><span>Click match strictness <b id="lbl-match"></b></span><input id="set-match" type="range" min="0.5" max="0.95" step="0.05"></label>
+      <p class="hint">Lower it if real trigger clicks get ignored; raise it if holster noise counts as the click.</p>
+      <label class="row"><span>Repeat: reholster time (s)</span><input id="set-rehol" type="number" min="2" max="30" step="1"></label>
+      <label class="row"><span>Rep timeout, no click (s)</span><input id="set-rtime" type="number" min="2" max="15" step="1"></label>
 
       <h2>Detection</h2>
       <label class="row col"><span>Sensitivity <b id="lbl-sens"></b></span><input id="set-sens" type="range" min="1" max="10" step="1"></label>

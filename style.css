@@ -83,3 +83,12 @@ dialog h3 { margin: 0 0 10px; }
 .status.live { font-size: 22px; }
 .readout.go { border-color: var(--ok); box-shadow: 0 0 0 2px var(--ok) inset; }
 .form select { font: inherit; background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+/* mode switch */
+.seg { display: grid; grid-template-columns: 1fr 1fr; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 3px; margin-bottom: 10px; }
+.seg button { font: inherit; font-weight: 700; background: none; border: 0; color: var(--muted); padding: 9px 0; border-radius: 9px; }
+.seg button.on { background: var(--panel2); color: var(--text); }
+.seg.small button { padding: 6px 0; font-size: 14px; }
+.dry-only { display: none; }
+body.dry .dry-only { display: grid; }
+body.dry #seg-mode button.on { color: #7cc4ff; }
+.tag { font-size: 11px; font-weight: 800; letter-spacing: .06em; background: #1d3a52; color: #7cc4ff; border-radius: 6px; padding: 1px 6px; }

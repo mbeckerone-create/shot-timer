@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.1.8';
+const BUILD = 'v0.2.0';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -10,6 +10,8 @@ const DEFAULT_SETTINGS = {
   dmin: 2, dmax: 5, hz: 2400, blen: 300, par: 0,
   sens: 5, echo: 180, lock: 100, auto: 4,
   audioMode: 'play-and-record', beepOut: 'webaudio',
+  mode: 'range',                                   // 'range' (live fire) | 'dry' (dry fire draws)
+  drySens: 7, dryRepeat: false, dryReholster: 5, dryTimeout: 5, clickMatch: 0.75, clickTpl: null, clickInfo: null,
   shooters: ['Me'], guns: ['Pistol'], shooter: 'Me', gun: 'Pistol',
 };
 const store = {
@@ -23,8 +25,26 @@ let history = store.get('st.history', []);
 const saveSettings = () => store.set('st.settings', S);
 const saveHistory = () => store.set('st.history', history);
 
+const isDry = () => S.mode === 'dry';
+const drySensToDb = (s) => -30 - (s - 1) * 3;          // dry fire: 1:-30 dB … 7:-48 dB … 10:-57 dB (just above room noise)
 function detParams() {
+  if (isDry()) return { shotDb: drySensToDb(S.drySens), echoMs: 0, lockMs: 150 };
   return { shotDb: ShotDetector.sensitivityToDb(S.sens), echoMs: S.echo, lockMs: S.lock };
+}
+// ---------- dry fire: trigger-click fingerprint ----------
+// Each detected sound carries 24 band energies (2–20 kHz). We compare its SHAPE (level removed) with the learned
+// trigger click by cosine similarity: ~0.9+ for the same click, ~0 for a holster clack or a tap.
+const shape = (b) => { const m = b.reduce((a, c) => a + c, 0) / b.length; return b.map((v) => v - m); };
+function cosSim(a, b) { let s = 0, na = 0, nb = 0; for (let i = 0; i < a.length; i++) { s += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; } return s / Math.sqrt(na * nb + 1e-12); }
+function clickScore(bands) { return S.clickTpl && bands ? cosSim(shape(bands), S.clickTpl) : 1; }
+// Build the template from the learned sounds: keep the ones most like each other (drops a slide rack or a bump).
+function buildTemplate(list) {
+  const sh = list.map((q) => shape(q.bands));
+  const avgSim = sh.map((a, i) => sh.reduce((t, b, j) => t + (i === j ? 0 : cosSim(a, b)), 0) / Math.max(1, sh.length - 1));
+  const cut = median(avgSim) - 0.05, keep = sh.filter((_, i) => avgSim[i] >= cut);
+  const tpl = keep[0].map((_, k) => keep.reduce((t, v) => t + v[k], 0) / keep.length);
+  const cons = keep.reduce((t, v) => t + cosSim(v, tpl), 0) / keep.length;
+  return { tpl: tpl.map((v) => +v.toFixed(2)), used: keep.length, of: list.length, consistency: cons, db: median(list.map((q) => q.db)) };
 }
 
 // ---------- audio engine ----------
@@ -126,9 +146,14 @@ function scheduleBeep(at, ms) {
 // ---------- timer state machine ----------
 // idle -> standby (waiting for random beep) -> live (listening) -> done (review)
 const BEEP_GAIN = 0.9;
-const T = { beepGain: BEEP_GAIN, beepOut: 'webaudio', genPeak: null, sessAtSchedule: '', sessAtBeep: '', state: 'idle', beepAt: 0, pending: [], raf: 0, beepFrame: null, acoustic: false, shots: [], oscs: [], lastActivity: 0, delay: 0, autoTimer: null, wakeLock: null };
+const T = { series: [], seriesOn: false, nextTimer: null, repTimer: null, learning: null, beepGain: BEEP_GAIN, beepOut: 'webaudio', genPeak: null, sessAtSchedule: '', sessAtBeep: '', state: 'idle', beepAt: 0, pending: [], raf: 0, beepFrame: null, acoustic: false, shots: [], oscs: [], lastActivity: 0, delay: 0, autoTimer: null, wakeLock: null };
 
 async function onMain() {
+  if (T.learning) return finishLearn();
+  if (isDry()) {
+    if (T.state === 'idle' || T.state === 'done') { T.seriesOn = S.dryRepeat; T.series = []; return start(); }
+    return stopSeries();                                 // standby / live / reholster: end the drill
+  }
   if (T.state === 'idle' || T.state === 'done') return start();
   if (T.state === 'standby') return cancel();
   if (T.state === 'live') return stop();
@@ -142,7 +167,7 @@ async function start() {
   }
   if (audio.ctx.state !== 'running') await audio.ctx.resume();
   if (T.state === 'done' && T.shots.length && !T.saved) autoSaveIfNeeded();
-  T.shots = []; T.pending = []; T.beepFrame = null; T.saved = false; renderShots(); renderStats();
+  T.shots = []; T.ignored = []; T.pending = []; T.beepFrame = null; T.saved = false; renderShots(); renderStats();
   const lo = Math.min(S.dmin, S.dmax), hi = Math.max(S.dmin, S.dmax);
   T.delay = lo + Math.random() * (hi - lo);
   const beepAt = audio.ctx.currentTime + Math.max(0.15, T.delay);
@@ -157,9 +182,9 @@ async function start() {
   if (S.par > 0) { parAt.push(beepAt + S.par); T.oscs.push(scheduleBeep(beepAt + S.par, S.blen)); }
   audio.node.port.postMessage({ type: 'params', params: detParams() });
   audio.node.port.postMessage({ type: 'arm', beepAt, parAt, beepMs: S.blen, beepHz: S.hz, latency: latencyEstimate() });
-  T.state = 'standby'; setStatus('Standby', 'standby'); $('big').textContent = '0.000';
+  T.state = 'standby'; setStatus(isDry() ? (T.seriesOn ? `Rep ${T.series.length + 1} · standby` : 'Standby') : 'Standby', 'standby'); $('big').textContent = '0.000';
   $('beepinfo').textContent = '';
-  setMain('CANCEL', 'standby'); $('btn-review').disabled = true;
+  setMain(isDry() && T.seriesOn ? 'STOP' : 'CANCEL', 'standby'); if (!isDry()) $('btn-review').disabled = true;
   T.beepAt = beepAt; cancelAnimationFrame(T.raf); T.raf = requestAnimationFrame(tick);
   requestWake();
 }
@@ -184,6 +209,10 @@ function goLive() {
   T.state = 'live'; T.lastActivity = performance.now();
   setStatus('GO', 'live'); setMain('STOP', 'stop');
   clearInterval(T.autoTimer);
+  if (isDry()) {                                       // dry fire: wait for one trigger click, give up after the rep timeout
+    clearTimeout(T.repTimer); T.repTimer = setTimeout(() => { if (T.state === 'live') endRep(null); }, S.dryTimeout * 1000);
+    return;
+  }
   T.autoTimer = setInterval(() => {
     if (T.state !== 'live') return clearInterval(T.autoTimer);
     const quiet = (performance.now() - T.lastActivity) / 1000;
@@ -192,8 +221,13 @@ function goLive() {
   }, 250);
 }
 
-function addShot(frame, db) {
+function addShot(frame, db, bands) {
   if (frame <= T.beepFrame) return;
+  if (isDry()) {
+    const t = (frame - T.beepFrame) / audio.sr, score = clickScore(bands);
+    if (score >= S.clickMatch) return endRep({ t, db, score });
+    T.ignored.push({ t, db, score }); renderShots(); return;   // holster clack or other noise: shown greyed out
+  }
   T.shots.push({ t: (frame - T.beepFrame) / audio.sr, db, removed: false });
   T.shots.sort((a, b) => a.t - b.t);
   T.lastActivity = performance.now(); renderShots(); renderStats(); renderDiag();
@@ -217,6 +251,76 @@ function stop() {
   autoSaveIfNeeded();
 }
 
+// ---------- dry fire reps ----------
+function endRep(hit) {
+  clearTimeout(T.repTimer); audio.node.port.postMessage({ type: 'disarm' });
+  for (const o of T.oscs) { try { o.stop(); } catch {} }
+  cancelAnimationFrame(T.raf);
+  T.series.push(hit ? { t: hit.t, score: hit.score } : { t: null });
+  if (hit) saveDryRep(hit);
+  T.state = 'done'; renderStats(); renderShots();
+  setStatus(hit ? `Draw ${fmt(hit.t)}` : 'No click heard', hit ? '' : 'err');
+  if (T.seriesOn) {                                    // repeat drill: reholster, then the next random beep
+    T.state = 'reholster'; setMain('STOP', 'stop');
+    let left = S.dryReholster;
+    const tickDown = () => {
+      if (T.state !== 'reholster') return;
+      if (left <= 0) return start();
+      $('beepinfo').textContent = `Reholster… next rep in ${left} s`; left--; T.nextTimer = setTimeout(tickDown, 1000);
+    };
+    tickDown();
+  } else { setMain('START'); releaseWake(); }
+}
+function stopSeries() {
+  clearTimeout(T.nextTimer); clearTimeout(T.repTimer); T.seriesOn = false;
+  if (T.state === 'standby' || T.state === 'live') {
+    for (const o of T.oscs) { try { o.stop(); } catch {} }
+    audio.node.port.postMessage({ type: 'disarm' }); cancelAnimationFrame(T.raf);
+  }
+  T.state = 'done'; setMain('START'); releaseWake();
+  const s = drySummary(); setStatus(s.n ? `Drill done · ${s.n} draws · best ${fmt(s.best)}` : 'Ready'); $('beepinfo').textContent = '';
+  renderStats();
+}
+function drySummary() {
+  const ts = T.series.filter((r) => r.t != null).map((r) => r.t);
+  return { n: ts.length, misses: T.series.length - ts.length, last: ts[ts.length - 1], best: ts.length ? Math.min(...ts) : null, avg: ts.length ? ts.reduce((a, b) => a + b, 0) / ts.length : null };
+}
+function saveDryRep(hit) {
+  history.unshift({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5), mode: 'dry', at: new Date().toISOString(),
+    shooter: S.shooter, gun: S.gun, delay: +T.delay.toFixed(2), acoustic: T.acoustic, match: +hit.score.toFixed(2), shots: [{ t: +hit.t.toFixed(4) }] });
+  saveHistory();
+}
+// ---------- dry fire: teach the trigger click ----------
+async function startLearn() {
+  try { await ensureAudio(); } catch { setStatus('Mic blocked', 'err'); return; }
+  if (T.state === 'standby' || T.state === 'live' || T.state === 'reholster') stopSeries();
+  T.learning = { list: [], timer: setTimeout(finishLearn, 30000) };
+  audio.node.port.postMessage({ type: 'params', params: detParams() });
+  audio.node.port.postMessage({ type: 'listen' });
+  setStatus('Teaching click', 'standby'); setMain('DONE', 'standby');
+  $('beepinfo').textContent = 'Dry fire 5 times, about 2 s apart. Rack the slide quietly between clicks.'; $('big').textContent = '0 / 5';
+  requestWake();
+}
+function learnSound(m) {
+  const L = T.learning; L.list.push({ bands: m.bands, db: m.peakDb });
+  $('big').textContent = `${L.list.length} / 5`;
+  if (L.list.length >= 5) finishLearn();
+}
+function finishLearn() {
+  const L = T.learning; if (!L) return; clearTimeout(L.timer); T.learning = null;
+  audio.node.port.postMessage({ type: 'disarm' }); releaseWake(); setMain('START'); $('big').textContent = '0.000';
+  if (L.list.length < 3) { setStatus('Not enough clicks', 'err'); $('beepinfo').textContent = `Heard ${L.list.length}. Try again closer to the phone, or raise Dry fire sensitivity.`; return; }
+  const r = buildTemplate(L.list);
+  S.clickTpl = r.tpl; S.clickInfo = { used: r.used, of: r.of, consistency: +r.consistency.toFixed(2), db: +r.db.toFixed(1), at: new Date().toISOString() }; saveSettings();
+  setStatus('Click learned ✓'); $('beepinfo').textContent = `Learned from ${r.used} of ${r.of} clicks (consistency ${r.consistency.toFixed(2)}).`;
+  renderClickInfo();
+}
+function renderClickInfo() {
+  const el = $('click-info'); if (!el) return; const c = S.clickInfo;
+  el.textContent = S.clickTpl && c ? `Learned ${new Date(c.at).toLocaleDateString()} from ${c.used}/${c.of} clicks · consistency ${c.consistency} · level ${c.db} dB`
+    : 'Not learned yet: any sharp sound after the beep will count as the click.';
+}
+
 function onWorklet(m) {
   if (m.type === 'level') { micHealth(m.db); return drawMeter(m.db); }
   if (m.type === 'beepdiag') return onBeepDiag(m);
@@ -225,12 +329,13 @@ function onWorklet(m) {
     T.beepFrame = m.frame; T.acoustic = m.acoustic;
     const off = ((m.frame - m.expected) / audio.sr * 1000).toFixed(0);
     $('beepinfo').textContent = m.acoustic ? 'Start beep heard by mic ✓ — timing from the beep' : 'Beep not heard by mic — using estimated timing';
-    const p = T.pending; T.pending = []; for (const q of p) addShot(q.frame, q.db);
+    const p = T.pending; T.pending = []; for (const q of p) { if (T.state !== 'live') break; addShot(q.frame, q.db, q.bands); }
     return;
   }
+  if (m.type === 'shot' && T.learning) return learnSound(m);
   if (m.type === 'shot' && T.state === 'live') {
-    if (T.beepFrame == null) T.pending.push({ frame: m.frame, db: m.peakDb });   // beep timing not confirmed yet
-    else addShot(m.frame, m.peakDb);
+    if (T.beepFrame == null) T.pending.push({ frame: m.frame, db: m.peakDb, bands: m.bands });   // beep timing not confirmed yet
+    else addShot(m.frame, m.peakDb, m.bands);
   }
 }
 
@@ -356,6 +461,14 @@ function summarize(ts) {
   };
 }
 function renderStats() {
+  const lab = (ids) => ['k-count', 'k-first', 'k-split', 'k-avg'].forEach((k, i) => { $(k).textContent = ids[i]; });
+  if (isDry()) {
+    const d = drySummary(); lab(['Draws', 'Last', 'Best', 'Avg']);
+    $('big').textContent = d.last != null && T.state !== 'live' ? fmt(d.last) : (T.state === 'live' ? $('big').textContent : '0.000');
+    $('s-count').textContent = d.n + (d.misses ? ` (+${d.misses}✗)` : ''); $('s-first').textContent = fmt(d.last); $('s-split').textContent = fmt(d.best); $('s-avg').textContent = fmt(d.avg);
+    return;
+  }
+  lab(['Shots', 'First', 'Split', 'Avg split']);
   const s = summarize(liveShots());
   $('big').textContent = s.count ? fmt(s.total) : '0.000';
   $('s-count').textContent = s.count; $('s-first').textContent = fmt(s.first);
@@ -363,6 +476,21 @@ function renderStats() {
 }
 function renderShots() {
   const ol = $('shotlist'); ol.innerHTML = '';
+  if (isDry()) {
+    if (!T.series.length && !(T.ignored || []).length) return;
+    const head = document.createElement('li'); head.className = 'head';
+    head.innerHTML = '<span>Rep</span><span>Draw</span><span class="sp">Match</span><span></span>'; ol.appendChild(head);
+    for (const q of (T.state === 'live' ? T.ignored : [])) {
+      const li = document.createElement('li'); li.className = 'removed';
+      li.innerHTML = `<span class="n"></span><span class="t">${fmt(q.t)}</span><span class="sp">ignored ${q.score.toFixed(2)}</span><span></span>`; ol.appendChild(li);
+    }
+    T.series.slice().reverse().forEach((r, i) => {
+      const li = document.createElement('li'); if (r.t == null) li.className = 'removed';
+      li.innerHTML = `<span class="n">${T.series.length - i}</span><span class="t">${r.t == null ? 'no click' : fmt(r.t)}</span><span class="sp">${r.score != null ? r.score.toFixed(2) : ''}</span><span></span>`;
+      ol.appendChild(li);
+    });
+    return;
+  }
   if (!T.shots.length) return;
   const head = document.createElement('li'); head.className = 'head';
   head.innerHTML = '<span>#</span><span>Time</span><span class="sp">Split</span><span></span>'; ol.appendChild(head);
@@ -383,7 +511,7 @@ let meterMax = -10, meterMin = -70;
 function drawMeter(db) {
   const pct = (v) => Math.max(0, Math.min(100, (v - meterMin) / (meterMax - meterMin) * 100));
   const f = $('meter-fill'); f.style.width = pct(db) + '%';
-  const thr = ShotDetector.sensitivityToDb(S.sens);
+  const thr = isDry() ? drySensToDb(S.drySens) : ShotDetector.sensitivityToDb(S.sens);
   f.classList.toggle('hot', db > thr); $('meter-thr').style.left = pct(thr) + '%';
 }
 
@@ -408,18 +536,30 @@ function renderHistory() {
   const el = $('history'); el.innerHTML = '';
   if (!history.length) { el.innerHTML = '<div class="empty">No strings yet. Shoot one on the Timer tab.</div>'; $('hist-summary').innerHTML = ''; return; }
   // summary across everything for the current shooter
-  const mine = history.filter((h) => h.shooter === S.shooter).map((h) => summarize(recShots(h))).filter((s) => s.count);
+  const mine = history.filter((h) => h.shooter === S.shooter && h.mode !== 'dry').map((h) => summarize(recShots(h))).filter((s) => s.count);
+  const dry = history.filter((h) => h.shooter === S.shooter && h.mode === 'dry').map((h) => recShots(h)[0]).filter((t) => t != null);
   const best = (a) => a.length ? Math.min(...a) : null;
   $('hist-summary').innerHTML =
-    `<div><span class="k">${esc(S.shooter)} · strings</span><span class="v">${mine.length}</span></div>` +
-    `<div><span class="k">Best first shot</span><span class="v">${fmt(best(mine.map((s) => s.first)))}</span></div>` +
-    `<div><span class="k">Best split</span><span class="v">${fmt(best(mine.map((s) => s.best).filter((x) => x != null)))}</span></div>`;
+    `<div><span class="k">${esc(S.shooter)} · best draw (live)</span><span class="v">${fmt(best(mine.map((s) => s.first)))}</span></div>` +
+    `<div><span class="k">Best split</span><span class="v">${fmt(best(mine.map((s) => s.best).filter((x) => x != null)))}</span></div>` +
+    `<div><span class="k">Best dry draw · ${dry.length} reps</span><span class="v">${fmt(best(dry))}</span></div>`;
   let day = '';
   for (const r of history) {
     const d = new Date(r.at), ds = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
     if (ds !== day) { day = ds; const h = document.createElement('div'); h.className = 'day'; h.textContent = ds; el.appendChild(h); }
     const s = summarize(recShots(r));
     const c = document.createElement('div'); c.className = 'card';
+    if (r.mode === 'dry') {
+      c.classList.add('dry');
+      c.innerHTML = `<div class="top"><span class="who"><span class="tag">DRY</span> ${esc(r.shooter)} · ${esc(r.gun)}</span><span class="when">${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' })}</span></div>
+        <div class="nums"><div><span class="k">Draw</span><span class="v">${fmt(s.first)}</span></div><div><span class="k">Click match</span><span class="v">${r.match ?? '—'}</span></div></div>
+        <div class="detail"><button class="del">Delete rep</button></div>`;
+      c.onclick = (e) => {
+        if (e.target.classList.contains('del')) { history = history.filter((h) => h !== r); saveHistory(); renderHistory(); return; }
+        c.classList.toggle('open');
+      };
+      el.appendChild(c); continue;
+    }
     c.innerHTML = `<div class="top"><span class="who">${esc(r.shooter)} · ${esc(r.gun)}</span><span class="when">${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span></div>
       <div class="nums"><div><span class="k">Shots</span><span class="v">${s.count}</span></div><div><span class="k">First</span><span class="v">${fmt(s.first)}</span></div>
       <div><span class="k">Avg split</span><span class="v">${fmt(s.avg)}</span></div><div><span class="k">Total</span><span class="v">${fmt(s.total)}</span></div></div>
@@ -435,8 +575,8 @@ function renderHistory() {
 function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
 function exportCsv() {
-  const rows = [['date', 'shooter', 'gun', 'shot', 'time_s', 'split_s', 'par_s', 'delay_s']];
-  for (const r of history.slice().reverse()) recShots(r).forEach((t, i, a) => rows.push([r.at, r.shooter, r.gun, i + 1, t.toFixed(4), i ? (t - a[i - 1]).toFixed(4) : '', r.par || '', r.delay]));
+  const rows = [['date', 'mode', 'shooter', 'gun', 'shot', 'time_s', 'split_s', 'par_s', 'delay_s']];
+  for (const r of history.slice().reverse()) recShots(r).forEach((t, i, a) => rows.push([r.at, r.mode || 'range', r.shooter, r.gun, i + 1, t.toFixed(4), i ? (t - a[i - 1]).toFixed(4) : '', r.par || '', r.delay]));
   const csv = rows.map((r) => r.map((v) => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v).join(',')).join('\n');
   const blob = new Blob([csv], { type: 'text/csv' }), url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href = url; a.download = `shot-timer-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
@@ -455,17 +595,20 @@ function pick(title, options, current, cb) {
 function renderChips() { $('lbl-shooter').textContent = S.shooter || '—'; $('lbl-gun').textContent = S.gun || '—'; }
 
 // ---------- settings form ----------
-const NUMS = { 'set-dmin': 'dmin', 'set-dmax': 'dmax', 'set-hz': 'hz', 'set-blen': 'blen', 'set-par': 'par', 'set-echo': 'echo', 'set-lock': 'lock', 'set-auto': 'auto', 'set-sens': 'sens' };
+const NUMS = { 'set-dsens': 'drySens', 'set-rehol': 'dryReholster', 'set-rtime': 'dryTimeout', 'set-match': 'clickMatch', 'set-dmin': 'dmin', 'set-dmax': 'dmax', 'set-hz': 'hz', 'set-blen': 'blen', 'set-par': 'par', 'set-echo': 'echo', 'set-lock': 'lock', 'set-auto': 'auto', 'set-sens': 'sens' };
 function bindSettings() {
   for (const [id, k] of Object.entries(NUMS)) {
     const el = $(id); el.value = S[k];
     el.addEventListener('input', () => {
       const v = parseFloat(el.value); if (!isFinite(v)) return; S[k] = v; saveSettings();
       if (k === 'sens') $('lbl-sens').textContent = v;
+      if (k === 'drySens') $('lbl-dsens').textContent = v;
+      if (k === 'clickMatch') $('lbl-match').textContent = v.toFixed(2);
       if (audio.node) audio.node.port.postMessage({ type: 'params', params: detParams() });
     });
   }
-  $('lbl-sens').textContent = S.sens;
+  $('lbl-sens').textContent = S.sens; $('lbl-dsens').textContent = S.drySens; $('lbl-match').textContent = S.clickMatch.toFixed(2);
+  $('btn-learn2').onclick = () => { showView('timer'); setMode('dry'); startLearn(); }; renderClickInfo();
   const lines = (el) => el.value.split('\n').map((s) => s.trim()).filter(Boolean);
   $('set-shooters').value = S.shooters.join('\n'); $('set-guns').value = S.guns.join('\n');
   $('set-shooters').addEventListener('change', (e) => { S.shooters = lines(e.target); if (!S.shooters.includes(S.shooter)) S.shooter = S.shooters[0] || ''; saveSettings(); renderChips(); });
@@ -496,6 +639,17 @@ async function analyzeFile(e) {
 async function requestWake() { try { T.wakeLock = await navigator.wakeLock?.request('screen'); } catch {} }
 function releaseWake() { try { T.wakeLock?.release(); } catch {} T.wakeLock = null; }
 
+function setMode(m) {
+  if (T.learning || ['standby', 'live', 'reholster'].includes(T.state)) return;     // not mid-string
+  S.mode = m; saveSettings(); T.state = 'idle'; T.series = []; T.shots = []; T.ignored = [];
+  document.querySelectorAll('#seg-mode button').forEach((b) => b.classList.toggle('on', b.dataset.mode === m));
+  document.querySelectorAll('#seg-rep button').forEach((b) => b.classList.toggle('on', (b.dataset.rep === 'repeat') === S.dryRepeat));
+  document.body.classList.toggle('dry', m === 'dry');
+  $('btn-review').textContent = m === 'dry' ? 'Teach click' : 'Save'; $('btn-review').disabled = m !== 'dry';
+  setStatus(m === 'dry' ? (S.clickTpl ? 'Dry fire · ready' : 'Dry fire · teach your click first') : 'Ready'); $('beepinfo').textContent = '';
+  if (audio.node) audio.node.port.postMessage({ type: 'params', params: detParams() });
+  renderShots(); renderStats(); drawMeter(-120);
+}
 function showView(v) {
   document.querySelectorAll('.view').forEach((el) => el.classList.toggle('active', el.id === 'view-' + v));
   document.querySelectorAll('.tab').forEach((el) => el.classList.toggle('active', el.dataset.view === v));
@@ -504,12 +658,14 @@ function showView(v) {
 
 document.addEventListener('DOMContentLoaded', () => {
   $('btn-main').onclick = onMain;
-  $('btn-review').onclick = autoSaveIfNeeded;
+  $('btn-review').onclick = () => (isDry() ? (T.learning ? finishLearn() : startLearn()) : autoSaveIfNeeded());
+  document.querySelectorAll('#seg-mode button').forEach((b) => b.onclick = () => setMode(b.dataset.mode));
+  document.querySelectorAll('#seg-rep button').forEach((b) => b.onclick = () => { if (T.state === 'standby' || T.state === 'live' || T.state === 'reholster') return; S.dryRepeat = b.dataset.rep === 'repeat'; saveSettings(); setMode('dry'); });
   $('btn-export').onclick = exportCsv;
   $('chip-shooter').onclick = () => pick('Shooter', S.shooters, S.shooter, (v) => { S.shooter = v; saveSettings(); renderChips(); });
   $('chip-gun').onclick = () => pick('Gun', S.guns, S.gun, (v) => { S.gun = v; saveSettings(); renderChips(); });
   document.querySelectorAll('.tab').forEach((b) => b.onclick = () => showView(b.dataset.view));
-  bindSettings(); renderChips(); renderStats(); renderHistory(); drawMeter(-120);
+  bindSettings(); renderChips(); setMode(S.mode); renderHistory();
   document.addEventListener('visibilitychange', () => { if (!document.hidden && audio.ctx && audio.ctx.state !== 'running') audio.ctx.resume(); });
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 });

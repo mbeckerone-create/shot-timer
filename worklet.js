@@ -7,7 +7,7 @@ class ShotTimerProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.det = new ShotDetector(sampleRate);
-    this.det.onShot = (s) => this.port.postMessage({ type: 'shot', frame: s.frame, peakDb: s.peakDb });
+    this.det.onShot = (s) => this.port.postMessage({ type: 'shot', frame: s.frame, peakDb: s.peakDb, bands: s.bands });
     this.beep = null; this.beepMeta = null; this.offset = null; this.q = 0; this.cap = null;
     this.port.onmessage = (e) => this.onMsg(e.data);
     this.port.postMessage({ type: 'ready', sampleRate });
@@ -28,7 +28,8 @@ class ShotTimerProcessor extends AudioWorkletProcessor {
       this.beepMeta = { exp, len, pad, ranges, hz: m.beepHz, latency: m.latency };
       const c0 = this.det.frame, c1 = Math.min(exp + Math.round(CAP_AFTER * sampleRate), c0 + CAP_MAX * sampleRate);
       this.cap = { from: c0, buf: new Float32Array(Math.max(1, c1 - c0)), sent: false, found: null, acoustic: false };
-    } else if (m.type === 'disarm') { this.beep = null; this.det.setBlank([[-Infinity, Infinity]]); }
+    } else if (m.type === 'listen') { this.beep = null; this.det.setParams({ notchHz: null }); this.det.setBlank([]); }   // learn mode: report every sound
+    else if (m.type === 'disarm') { this.beep = null; this.det.setBlank([[-Infinity, Infinity]]); }
   }
   capture(ch, start) {
     const c = this.cap; if (!c || c.sent) return;
