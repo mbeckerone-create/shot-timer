@@ -92,3 +92,5 @@ dialog h3 { margin: 0 0 10px; }
 body.dry .dry-only { display: grid; }
 body.dry #seg-mode button.on { color: #7cc4ff; }
 .tag { font-size: 11px; font-weight: 800; letter-spacing: .06em; background: #1d3a52; color: #7cc4ff; border-radius: 6px; padding: 1px 6px; }
+
+.seg.seg3 { grid-template-columns: 1fr 1fr 1fr; }

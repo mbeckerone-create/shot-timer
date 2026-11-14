@@ -24,6 +24,7 @@
     </header>
 
     <div class="seg" id="seg-mode"><button data-mode="range">Range</button><button data-mode="dry">Dry fire</button></div>
+    <div class="seg small dry-only seg3" id="seg-drill"><button data-drill="trigger">Trigger</button><button data-drill="draw">Draw</button><button data-drill="reload">Reload</button></div>
     <div class="seg small dry-only" id="seg-rep"><button data-rep="single">Single rep</button><button data-rep="repeat">Repeat drill</button></div>
 
     <div class="readout">
@@ -67,10 +68,12 @@
 
       <h2>Dry fire</h2>
       <div class="row col"><span>Trigger click</span><p class="hint" id="click-info"></p><button id="btn-learn2" class="btn ghost small">Teach my trigger click</button></div>
+      <div class="row col"><span>Holster draw</span><p class="hint" id="hol-info"></p><button id="btn-learn-hol" class="btn ghost small">Teach my holster draw</button></div>
       <label class="row col"><span>Dry fire sensitivity <b id="lbl-dsens"></b></span><input id="set-dsens" type="range" min="1" max="10" step="1"></label>
       <label class="row col"><span>Click match strictness <b id="lbl-match"></b></span><input id="set-match" type="range" min="0.5" max="0.95" step="0.05"></label>
       <p class="hint">A sound counts as the click only if it matches the learned click, is about as loud, and is a single snap (a rack is two snaps). Lower strictness if real clicks show "not the click".</p>
       <label class="row"><span>Repeat: reholster time (s)</span><input id="set-rehol" type="number" min="2" max="30" step="1"></label>
+      <label class="row"><span>Reload drill: time allowed for the reload (s)</span><input id="set-rlto" type="number" min="3" max="30" step="1"></label>
       <label class="row"><span>Rep timeout, no click (s)</span><input id="set-rtime" type="number" min="2" max="15" step="1"></label>
 
       <h2>Detection</h2>
