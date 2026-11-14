@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.3.0';
+const BUILD = 'v0.3.1';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -235,7 +235,7 @@ function goLive() {
   setStatus('GO', 'live'); setMain('STOP', 'stop');
   clearInterval(T.autoTimer);
   if (isDry()) {                                       // dry fire: wait for one trigger click, give up after the rep timeout
-    T.rep = { holster: null, clicks: [] };
+    T.rep = { holster: null, clicks: [], snaps: [], tentative: null, tTimer: null };
     clearTimeout(T.repTimer); T.repTimer = setTimeout(repTimeout, (S.dryTimeout + ISO_S + 0.1) * 1000);
     return;
   }
@@ -280,21 +280,41 @@ function stop() {
 
 // ---------- dry fire reps ----------
 // trigger: beep → click.   draw: beep → holster snap (reaction) → click (shot).   reload: beep → click → reload → click.
+// Draw / reload first shot use ORDER as well as fingerprints (checked on 16 filmed reps): the holster snap always
+// comes before the click. A click-like snap with nothing before it is held for up to 1.4 s: if another click-like
+// snap follows, the first was the holster. The holster is the loudest snap 0.25–2.0 s before the click.
+// With no holster fingerprint at all this times 14/14 filmed reps right (the old rule: 0/14).
+const PROMOTE_S = 1.4, MIN_SPLIT = 0.35;   // filmed holster→click splits: 0.57–1.0 s
 function onDrySound(c, j) {
   const rep = T.rep, drill = S.dryDrill;
   const note = (reason) => { T.ignored.push({ t: c.t, db: c.db, score: j.score, reason }); renderShots(); };
-  if (j.kind === 'holster') {
-    if (drill !== 'trigger' && !rep.holster && !rep.clicks.length) { rep.holster = c; T.ignored.push({ t: c.t, reason: 'holster', mark: true }); renderShots(); setStatus(`Holster ${fmt(c.t)}`, 'live'); return; }
-    return note('holster');
+  if (!j.kind) return note(j.reason);
+  if (drill === 'trigger') return j.kind === 'click' ? acceptShot(c, j.score) : note('holster');
+  const timingFirst = !rep.clicks.length;                            // draw shot, or reload shot 1
+  if (!timingFirst) {                                                // reload: waiting for shot 2
+    if (j.kind !== 'click') return note(j.kind);
+    if (c.t - rep.clicks[0].t < 0.4) return note('too soon');
+    return acceptShot(c, j.score);
   }
-  if (j.kind !== 'click') return note(j.reason);
-  rep.clicks.push({ t: c.t, score: j.score });
-  if (drill === 'reload' && rep.clicks.length === 1) {               // first shot: now time the reload
+  rep.snaps.push({ t: c.t, db: c.db, kind: j.kind, score: j.score });
+  if (j.kind === 'holster') { T.ignored.push({ t: c.t, reason: 'holster?', mark: true }); renderShots(); return; }
+  if (rep.tentative && c.t - rep.tentative.t >= MIN_SPLIT) {         // 2nd click-like snap: the 1st was the holster
+    clearTimeout(rep.tTimer); rep.holster = rep.tentative; rep.tentative = null; return acceptShot(c, j.score);
+  }
+  const pri = rep.snaps.filter((p) => p.t < c.t - 0.25 && p.t > c.t - 2.0);
+  if (pri.length) { rep.holster = pri.reduce((a, p) => (p.db > a.db ? p : a)); return acceptShot(c, j.score); }
+  rep.tentative = { t: c.t, db: c.db, score: j.score };            // nothing before it: maybe this IS the holster
+  T.ignored.push({ t: c.t, reason: 'snap…', mark: true }); renderShots();
+  clearTimeout(rep.tTimer);
+  rep.tTimer = setTimeout(() => { if (T.state === 'live' && rep.tentative) { const tv = rep.tentative; rep.tentative = null; acceptShot(tv, tv.score); } }, PROMOTE_S * 1000);
+}
+function acceptShot(c, score) {
+  const rep = T.rep; rep.clicks.push({ t: c.t, score });
+  if (S.dryDrill === 'reload' && rep.clicks.length === 1) {         // first shot: now time the reload
     setStatus(`Shot ${fmt(c.t)} · RELOAD`, 'live'); T.ignored.push({ t: c.t, reason: 'shot 1', mark: true }); renderShots();
-    clearTimeout(T.repTimer); T.repTimer = setTimeout(repTimeout, (S.reloadTimeout + ISO_S + 0.1) * 1000);
+    clearTimeout(rep.tTimer); clearTimeout(T.repTimer); T.repTimer = setTimeout(repTimeout, (S.reloadTimeout + ISO_S + 0.1) * 1000);
     return;
   }
-  if (drill === 'reload' && c.t - rep.clicks[0].t < 0.4) { rep.clicks.pop(); return note('too soon'); }
   endRep(repResult());
 }
 function repResult() {
@@ -303,9 +323,14 @@ function repResult() {
   const react = rep.holster ? rep.holster.t : null;
   return { t: c1.t, score: c1.score, react, split: react != null ? c1.t - react : null, t2: c2 ? c2.t : null, reload: c2 ? c2.t - c1.t : null };
 }
-function repTimeout() { if (T.state === 'live') endRep(repResult()); }   // reload with only one shot keeps the shot, no reload time
+function repTimeout() {
+  if (T.state !== 'live') return;
+  const rep = T.rep; clearTimeout(rep.tTimer);
+  if (rep.tentative && !rep.clicks.length) { const tv = rep.tentative; rep.tentative = null; return acceptShot(tv, tv.score); }
+  endRep(repResult());
+}   // reload with only one shot keeps the shot, no reload time
 function endRep(hit) {
-  clearTimeout(T.repTimer); audio.node.port.postMessage({ type: 'disarm' });
+  clearTimeout(T.repTimer); if (T.rep) clearTimeout(T.rep.tTimer); audio.node.port.postMessage({ type: 'disarm' });
   for (const o of T.oscs) { try { o.stop(); } catch {} }
   cancelAnimationFrame(T.raf);
   T.series.push(hit ? Object.assign({ drill: S.dryDrill }, hit) : { t: null });
@@ -325,7 +350,7 @@ function endRep(hit) {
   } else { setMain('START'); releaseWake(); }
 }
 function stopSeries() {
-  clearTimeout(T.nextTimer); clearTimeout(T.repTimer); T.seriesOn = false;
+  clearTimeout(T.nextTimer); clearTimeout(T.repTimer); if (T.rep) clearTimeout(T.rep.tTimer); T.seriesOn = false;
   if (T.state === 'standby' || T.state === 'live') {
     for (const o of T.oscs) { try { o.stop(); } catch {} }
     audio.node.port.postMessage({ type: 'disarm' }); cancelAnimationFrame(T.raf);
@@ -573,7 +598,7 @@ function renderShots() {
     const head = document.createElement('li'); head.className = 'head';
     const dr = S.dryDrill;
     head.innerHTML = `<span>Rep</span><span>${dr === 'reload' ? 'Reload' : dr === 'draw' ? 'Shot' : 'Draw'}</span><span class="sp">${dr === 'reload' ? '1st shot' : dr === 'draw' ? 'React · split' : 'Match'}</span><span></span>`; ol.appendChild(head);
-    const why = { sound: 'not the click', quiet: 'too quiet', double: 'double snap', holster: 'holster', 'too soon': 'too soon' };
+    const why = { sound: 'not the click', quiet: 'too quiet', double: 'double snap', holster: 'holster', 'too soon': 'too soon', 'snap…': 'snap… (holster or shot?)' };
     for (const q of (T.state === 'live' ? T.ignored : [])) {
       const li = document.createElement('li'); li.className = q.mark ? '' : 'removed';
       li.innerHTML = `<span class="n"></span><span class="t">${fmt(q.t)}</span><span class="sp">${why[q.reason] || q.reason}</span><span></span>`; ol.appendChild(li);
