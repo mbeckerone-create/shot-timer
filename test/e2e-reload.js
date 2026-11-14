@@ -5,6 +5,7 @@ const { chromium } = require('playwright'); const fs = require('fs');
   const p = await b.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 }); const errs = []; p.on('pageerror', (e) => errs.push(e.message));
   await p.addInitScript((t) => localStorage.setItem('st.settings', JSON.stringify(Object.assign({ mode: 'dry', dryDrill: 'reload', dryRepeat: true, dmin: 0.3, dmax: 0.8, dryReholster: 2, dryTimeout: 6 }, t))), tpl);
   await p.goto('http://localhost:8765/?v=' + Date.now());
+  await p.evaluate(() => enterDrill(S.mode, S.dryDrill));
   console.log('ready:', await p.textContent('#status'));
   await p.click('#btn-main'); await p.waitForTimeout(40000);
   await p.screenshot({ path: out + '/reload.png' }); await p.click('#btn-main');

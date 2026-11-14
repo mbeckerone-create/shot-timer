@@ -6,12 +6,13 @@ const { chromium } = require('playwright');
   const errs = []; p.on('pageerror', (e) => errs.push(e.message));
   await p.addInitScript(() => localStorage.setItem('st.settings', JSON.stringify({ dmin: 0.5, dmax: 1.5, dryReholster: 2, mode: 'dry' })));
   await p.goto('http://localhost:8765/?v=' + Date.now());
+  await p.evaluate(() => enterDrill(S.mode, S.dryDrill));
   // 1) teach: the fake mic plays holster + trigger pairs; the template should keep the trigger-like majority? (equal mix -> report)
   await p.click('#btn-review'); await p.waitForTimeout(9000);
   if (await p.textContent('#btn-main') === 'DONE') await p.click('#btn-main');
   console.log('teach:', await p.textContent('#status'), '|', await p.textContent('#beepinfo'));
   // 2) repeat drill
-  await p.click('#seg-rep button[data-rep=repeat]'); await p.click('#btn-main'); await p.waitForTimeout(14000);
+  await p.click('#btn-main'); await p.waitForTimeout(14000);
   await p.screenshot({ path: out + '/dry.png' });
   await p.click('#btn-main');
   console.log('drill:', await p.textContent('#status'));

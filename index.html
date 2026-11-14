@@ -16,18 +16,32 @@
 <body>
 <main id="app">
 
-  <!-- TIMER -->
-  <section id="view-timer" class="view active">
+  <!-- MAIN MENU -->
+  <section id="view-home" class="view menu active">
+    <div class="menu-head"><h1>Shot Timer</h1><p class="hint">Pick what you're training.</p></div>
+    <button class="menu-btn" data-go="range"><b>Range</b><span>Live fire · shots, splits, first-shot time</span></button>
+    <button class="menu-btn dry" data-go="dry"><b>Dry fire</b><span>Trigger · Draw · Reload</span></button>
+  </section>
+
+  <section id="view-drymenu" class="view menu">
+    <div class="menu-head"><button class="back" data-back="home">‹ Back</button><h1>Dry fire</h1></div>
+    <button class="menu-btn dry" data-drill="trigger"><b>Trigger</b><span>Beep → trigger click</span></button>
+    <button class="menu-btn dry" data-drill="draw"><b>Draw</b><span>Reaction · shot · draw-to-shot split</span></button>
+    <button class="menu-btn dry" data-drill="reload"><b>Reload</b><span>First shot · reload time to the next shot</span></button>
+  </section>
+
+  <!-- TIMER (a drill) -->
+  <section id="view-timer" class="view">
+    <div class="drill-head">
+      <button class="back" id="btn-back">‹ Back</button>
+      <div class="drill-title"><b id="drill-title">Range</b><span id="ses-text"></span></div>
+      <div class="seg small dry-only" id="seg-rep"><button data-rep="single">Single</button><button data-rep="repeat">Repeat</button></div>
+    </div>
     <header class="bar">
       <button id="chip-shooter" class="chip" aria-label="Shooter"><span class="chip-k">Shooter</span><span id="lbl-shooter">—</span></button>
       <button id="chip-gun" class="chip" aria-label="Gun"><span class="chip-k">Gun</span><span id="lbl-gun">—</span></button>
       <button id="chip-film" class="chip film" aria-label="Film training clip"><span class="chip-k">🎥 Film</span><span id="lbl-film">Off</span></button>
     </header>
-
-    <div class="ses-bar" id="ses-bar"><span id="ses-text">No session</span><button id="btn-ses" class="btn ghost small">Start session</button></div>
-    <div class="seg" id="seg-mode"><button data-mode="range">Range</button><button data-mode="dry">Dry fire</button></div>
-    <div class="seg small dry-only seg3" id="seg-drill"><button data-drill="trigger">Trigger</button><button data-drill="draw">Draw</button><button data-drill="reload">Reload</button></div>
-    <div class="seg small dry-only" id="seg-rep"><button data-rep="single">Single rep</button><button data-rep="repeat">Repeat drill</button></div>
 
     <div class="camwrap"><video id="cam" playsinline muted autoplay></video>
       <div class="cam-over"><div id="cam-status" class="cam-status"></div><div id="cam-events" class="cam-events"></div><div class="cam-rec">● REC</div></div></div>
@@ -114,7 +128,7 @@
   </section>
 
   <nav class="tabs">
-    <button data-view="timer" class="tab active">Timer</button>
+    <button data-view="train" class="tab active">Train</button>
     <button data-view="history" class="tab">History</button>
     <button data-view="settings" class="tab">Settings</button>
   </nav>

@@ -6,6 +6,7 @@ const { chromium } = require('playwright'); const fs = require('fs');
   const p = await ctx.newPage(); const errs = []; p.on('pageerror', (e) => errs.push(e.message));
   await p.addInitScript((t) => localStorage.setItem('st.settings', JSON.stringify(Object.assign({ mode: 'dry', dryDrill: 'draw', dryRepeat: true, dmin: 0.3, dmax: 0.8, dryReholster: 2, dryTimeout: 6 }, t))), tpl);
   await p.goto('http://localhost:8765/?v=' + Date.now());
+  await p.evaluate(() => enterDrill(S.mode, S.dryDrill));
   await p.click('#chip-film'); await p.waitForTimeout(1500);
   console.log('film chip:', await p.textContent('#lbl-film'));
   await p.click('#btn-main'); await p.waitForTimeout(25000);

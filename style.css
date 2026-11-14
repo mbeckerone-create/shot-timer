@@ -144,3 +144,21 @@ body.filming .readout .meter, body.filming #beepinfo { display: none; }
 body.filming .bar .chip:not(.film) { opacity: .85; }
 body.filming .cam-over { top: 18%; }
 body.filming .cam-ev { font-size: 17px; } body.filming .cam-ev.rep { font-size: 19px; }
+
+/* menus */
+.view.menu { gap: 14px; padding-top: 8px; }
+.menu-head { display: flex; flex-direction: column; gap: 4px; padding: 18px 0 6px; }
+.menu-head h1 { font-size: 30px; }
+.menu-btn { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; font: inherit; color: var(--text);
+  background: var(--panel); border: 1px solid var(--line); border-left: 5px solid var(--accent); border-radius: 16px; padding: 22px 20px; }
+.menu-btn b { font-size: 26px; letter-spacing: .02em; } .menu-btn span { color: var(--muted); font-size: 14px; }
+.menu-btn.dry { border-left-color: #7cc4ff; }
+.menu-btn:active { transform: scale(.99); background: var(--panel2); }
+.back { font: inherit; font-weight: 700; background: none; border: 0; color: var(--accent); padding: 8px 4px; align-self: flex-start; }
+.drill-head { display: flex; align-items: center; gap: 8px; padding: 6px 0 0; }
+.drill-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.drill-title b { font-size: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.drill-title span { font-size: 12px; color: var(--ok); }
+.drill-head .seg { margin: 0; width: 150px; flex: 0 0 auto; }
+body.filming .drill-head { position: relative; z-index: 1; background: rgba(10,12,15,.55); border-radius: 12px; padding: 4px 6px; }
+body.filming #seg-rep { display: grid !important; }

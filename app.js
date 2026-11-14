@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.5.0';
+const BUILD = 'v0.6.0';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -792,17 +792,18 @@ async function shareFiles(files) {
 function exportCsv() { shareFiles([new File([csvOf(history)], `shot-timer-all-${new Date().toISOString().slice(0, 10)}.csv`, { type: 'text/csv' })]); }
 
 // ---------- sessions: everything between Start and End is tagged, and exported on its own ----------
-function startSession() {
+function startSession(auto) {
   const d = new Date(), def = `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
-  const name = (prompt('Session name (e.g. "Dry fire – draws" or "Range day")', def) || '').trim(); if (!name) return;
+  const name = auto ? `${auto} · ${def}` : (prompt('Session name', def) || '').trim(); if (!name) return;
   const ses = { id: 's' + Date.now().toString(36), name, start: d.toISOString(), end: null, cfgStart: cfgSnap() };
   sessions.unshift(ses); activeSession = ses.id; saveSessions(); renderSession();
 }
 function endSession() {
   const ses = sessions.find((x) => x.id === activeSession); activeSession = null;
   if (ses) { ses.end = new Date().toISOString(); ses.cfgEnd = cfgSnap(); }
+  if (ses && !sessionRecs(ses.id).length) sessions = sessions.filter((x) => x !== ses);   // nothing saved: drop it quietly
   saveSessions(); renderSession(); renderHistory();
-  if (ses) { $('ses-dlg-info').textContent = sessionLine(ses); $('ses-dlg').dataset.id = ses.id; $('ses-dlg').showModal(); }
+  if (ses && sessions.includes(ses)) { $('ses-dlg-info').textContent = `${ses.name}\n${sessionLine(ses)}`; $('ses-dlg').dataset.id = ses.id; $('ses-dlg').showModal(); }
 }
 function sessionRecs(id) { return history.filter((h) => h.session === id); }
 function sessionLine(ses) {
@@ -817,11 +818,35 @@ function exportSession(id) {
   shareFiles([new File([csvOf(recs)], base + '.csv', { type: 'text/csv' }), new File([JSON.stringify(json, null, 1)], base + '.json', { type: 'application/json' })]);
 }
 function renderSession() {
-  const bar = $('ses-bar'); if (!bar) return;
+  const el = $('ses-text'); if (!el) return;
   const ses = sessions.find((x) => x.id === activeSession);
-  bar.classList.toggle('on', !!ses);
-  $('ses-text').textContent = ses ? `● ${ses.name} · ${sessionRecs(ses.id).length} saved` : 'No session';
-  $('btn-ses').textContent = ses ? 'End session' : 'Start session';
+  el.textContent = ses ? `● session · ${sessionRecs(ses.id).length} saved` : '';
+}
+// ---------- menus: Home → (Range | Dry fire → Trigger/Draw/Reload) → drill. Entering a drill starts a session; Back ends it.
+const DRILL_NAMES = { range: 'Range', trigger: 'Dry fire · Trigger', draw: 'Dry fire · Draw', reload: 'Dry fire · Reload' };
+let screen = 'home';
+function showScreen(v) {
+  screen = v;
+  document.querySelectorAll('.view').forEach((el) => el.classList.toggle('active', el.id === 'view-' + v));
+  const train = ['home', 'drymenu', 'timer'].includes(v);
+  document.querySelectorAll('.tab').forEach((el) => el.classList.toggle('active', train ? el.dataset.view === 'train' : el.dataset.view === v));
+  if (v === 'history') renderHistory();
+}
+let lastTrain = 'home';
+function enterDrill(mode, drill) {
+  if (drill) S.dryDrill = drill;
+  setMode(mode); saveSettings();
+  $('drill-title').textContent = DRILL_NAMES[mode === 'dry' ? S.dryDrill : 'range'];
+  if (!activeSession) startSession(DRILL_NAMES[mode === 'dry' ? S.dryDrill : 'range']);
+  renderSession(); lastTrain = 'timer'; showScreen('timer');
+}
+function leaveDrill() {
+  if (T.learning) finishLearn();
+  if (isDry() && ['standby', 'live', 'reholster'].includes(T.state)) stopSeries();
+  else if (T.state === 'standby') cancel(); else if (T.state === 'live') stop();
+  const back = isDry() ? 'drymenu' : 'home';
+  const finish = () => { endSession(); lastTrain = back; showScreen(back); };
+  if (film.on) { $('film-dlg').addEventListener('close', finish, { once: true }); stopFilm(); } else finish();
 }
 
 // ---------- shooter / gun pickers ----------
@@ -849,8 +874,8 @@ function bindSettings() {
     });
   }
   $('lbl-sens').textContent = S.sens; $('lbl-dsens').textContent = S.drySens; $('lbl-match').textContent = S.clickMatch.toFixed(2);
-  $('btn-learn2').onclick = () => { showView('timer'); setMode('dry'); startLearn('click'); };
-  $('btn-learn-hol').onclick = () => { showView('timer'); setMode('dry'); startLearn('holster'); }; renderClickInfo();
+  $('btn-learn2').onclick = () => { enterDrill('dry'); startLearn('click'); };
+  $('btn-learn-hol').onclick = () => { enterDrill('dry'); startLearn('holster'); }; renderClickInfo();
   const lines = (el) => el.value.split('\n').map((s) => s.trim()).filter(Boolean);
   $('set-shooters').value = S.shooters.join('\n'); $('set-guns').value = S.guns.join('\n');
   $('set-shooters').addEventListener('change', (e) => { S.shooters = lines(e.target); if (!S.shooters.includes(S.shooter)) S.shooter = S.shooters[0] || ''; saveSettings(); renderChips(); });
@@ -895,6 +920,8 @@ function setMode(m) {
   renderShots(); renderStats(); drawMeter(-120);
 }
 function showView(v) {
+  if (v === 'train') return showScreen(lastTrain);
+  if (['home', 'drymenu', 'timer', 'history', 'settings'].includes(v)) return showScreen(v);
   document.querySelectorAll('.view').forEach((el) => el.classList.toggle('active', el.id === 'view-' + v));
   document.querySelectorAll('.tab').forEach((el) => el.classList.toggle('active', el.dataset.view === v));
   if (v === 'history') renderHistory();
@@ -907,7 +934,10 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('#seg-mode button').forEach((b) => b.onclick = () => setMode(b.dataset.mode));
   document.querySelectorAll('#seg-rep button').forEach((b) => b.onclick = () => { if (T.state === 'standby' || T.state === 'live' || T.state === 'reholster') return; S.dryRepeat = b.dataset.rep === 'repeat'; saveSettings(); setMode('dry'); });
   $('btn-export').onclick = exportCsv;
-  $('btn-ses').onclick = () => (activeSession ? endSession() : startSession());
+  document.querySelectorAll('.menu-btn[data-go]').forEach((b) => b.onclick = () => { if (b.dataset.go === 'range') enterDrill('range'); else { lastTrain = 'drymenu'; showScreen('drymenu'); } });
+  document.querySelectorAll('.menu-btn[data-drill]').forEach((b) => b.onclick = () => enterDrill('dry', b.dataset.drill));
+  document.querySelectorAll('.back[data-back]').forEach((b) => b.onclick = () => { lastTrain = b.dataset.back; showScreen(b.dataset.back); });
+  $('btn-back').onclick = leaveDrill;
   $('btn-ses-export').onclick = (e) => { e.preventDefault(); exportSession($('ses-dlg').dataset.id); };
   $('btn-ses-close').onclick = () => $('ses-dlg').close(); renderSession();
   $('chip-film').onclick = toggleFilm; $('btn-film-share').onclick = (e) => { e.preventDefault(); shareFilm(); };
@@ -916,7 +946,9 @@ document.addEventListener('DOMContentLoaded', () => {
   $('chip-shooter').onclick = () => pick('Shooter', S.shooters, S.shooter, (v) => { S.shooter = v; saveSettings(); renderChips(); });
   $('chip-gun').onclick = () => pick('Gun', S.guns, S.gun, (v) => { S.gun = v; saveSettings(); renderChips(); });
   document.querySelectorAll('.tab').forEach((b) => b.onclick = () => showView(b.dataset.view));
-  bindSettings(); renderChips(); setMode(S.mode); renderHistory();
+  // a session left open when the app was closed is closed now (its reps stay); empty ones are dropped
+  if (activeSession) { const ses = sessions.find((x) => x.id === activeSession); if (ses) { ses.end = ses.end || new Date().toISOString(); if (!sessionRecs(ses.id).length) sessions = sessions.filter((x) => x !== ses); } activeSession = null; saveSessions(); }
+  bindSettings(); renderChips(); setMode(S.mode); renderHistory(); showScreen('home');
   document.addEventListener('visibilitychange', () => { if (!document.hidden && audio.ctx && audio.ctx.state !== 'running') audio.ctx.resume(); });
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 });

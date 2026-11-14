@@ -6,6 +6,7 @@ const { chromium } = require('playwright');
   const errs = []; p.on('pageerror', (e) => errs.push(e.message));
   await p.addInitScript(() => localStorage.setItem('st.settings', JSON.stringify({ mode: 'dry' })));
   await p.goto('http://localhost:8765/?v=' + Date.now());
+  await p.evaluate(() => enterDrill(S.mode, S.dryDrill));
   await p.click('#btn-review');
   let last = '';
   for (let i = 0; i < 60; i++) { const s = (await p.textContent('#status')) + ' | ' + (await p.textContent('#big')); if (s !== last) { console.log(s); last = s; } if (s.startsWith('Click learned') || s.startsWith('Not enough')) break; await p.waitForTimeout(500); }

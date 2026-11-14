@@ -6,6 +6,7 @@ const { chromium } = require('playwright');
   const errs = []; p.on('pageerror', e => errs.push(e.message));
   await p.addInitScript((extra) => localStorage.setItem('st.settings', JSON.stringify(Object.assign({ dmin: 1, dmax: 1, auto: 0 }, JSON.parse(extra)))), process.env.EXTRA || '{}');
   await p.goto('http://localhost:8765/?v=' + Date.now());
+  await p.evaluate(() => enterDrill(S.mode, S.dryDrill));
   await p.click('#btn-main'); await p.waitForTimeout(7500);
   console.log('beepinfo:', await p.textContent('#beepinfo'));
   console.log('shots:', await p.locator('#shotlist li:not(.head)').count());
