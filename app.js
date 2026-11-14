@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.4.0';
+const BUILD = 'v0.5.0';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -28,8 +28,15 @@ if (!S.guns.includes(S.gun)) S.gun = S.guns[0] || '';
 if (S.clickTpl && S.clickTpl.length !== 32) { S.clickTpl = null; S.clickInfo = null; }
 if (S.clickMatch === 0.75) S.clickMatch = 0.9;
 let history = store.get('st.history', []);
+let sessions = store.get('st.sessions', []);                 // [{id, name, start, end, cfgStart, cfgEnd}]
+let activeSession = store.get('st.activeSession', null);    // id or null
 const saveSettings = () => store.set('st.settings', S);
 const saveHistory = () => store.set('st.history', history);
+const saveSessions = () => { store.set('st.sessions', sessions); store.set('st.activeSession', activeSession); };
+// settings that shape a result: stored on every record made in a session, and on the session itself
+const cfgSnap = () => ({ mode: S.mode, drill: S.dryDrill, sens: S.sens, drySens: S.drySens, clickMatch: S.clickMatch, echo: S.echo, lock: S.lock, par: S.par, dmin: S.dmin, dmax: S.dmax,
+  beepHz: S.hz, beepMs: S.blen, repeat: S.dryRepeat, shooter: S.shooter, gun: S.gun, clickLearned: S.clickInfo ? S.clickInfo.at : null, holsterLearned: S.holInfo ? S.holInfo.at : null });
+function tagRecord(r) { if (activeSession) { r.session = activeSession; r.cfg = cfgSnap(); } return r; }
 
 const isDry = () => S.mode === 'dry';
 const drySensToDb = (s) => -30 - (s - 1) * 3;          // dry fire: 1:-30 dB … 7:-48 dB … 10:-57 dB (just above room noise)
@@ -374,10 +381,10 @@ function drySummary() {
 }
 function saveDryRep(hit) {
   const shots = [{ t: +hit.t.toFixed(4) }]; if (hit.t2 != null) shots.push({ t: +hit.t2.toFixed(4) });
-  history.unshift({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5), mode: 'dry', drill: S.dryDrill, at: new Date().toISOString(),
+  history.unshift(tagRecord({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5), mode: 'dry', drill: S.dryDrill, at: new Date().toISOString(),
     shooter: S.shooter, gun: S.gun, delay: +T.delay.toFixed(2), acoustic: T.acoustic, match: +hit.score.toFixed(2),
-    react: hit.react != null ? +hit.react.toFixed(4) : undefined, reload: hit.reload != null ? +hit.reload.toFixed(4) : undefined, shots });
-  saveHistory();
+    react: hit.react != null ? +hit.react.toFixed(4) : undefined, reload: hit.reload != null ? +hit.reload.toFixed(4) : undefined, shots }));
+  saveHistory(); renderSession();
 }
 // ---------- dry fire: teach the trigger click (guided) ----------
 // 5 rounds: beep → user dry-fires once → we listen ONLY for 2 s after that beep and keep the strongest sound.
@@ -461,7 +468,7 @@ async function startFilm() {
   film.log = { kind: 'shot-timer-training', version: 1, build: BUILD, created: new Date().toISOString(), sampleRate: audio.sr, ua: navigator.userAgent,
     settings: { mode: S.mode, drill: S.dryDrill, sens: S.sens, drySens: S.drySens, clickMatch: S.clickMatch, beepHz: S.hz, beepMs: S.blen, camFacing: S.camFacing,
       clickTpl: S.clickTpl, clickInfo: S.clickInfo, holTpl: S.holTpl, holInfo: S.holInfo, shooter: S.shooter, gun: S.gun },
-    recStartCtx: null, events: [] };
+    session: activeSession, recStartCtx: null, events: [] };
   film.rec.onstart = () => { film.log.recStartCtx = +audio.ctx.currentTime.toFixed(4); film.log.recStartWall = Date.now(); };
   film.rec.start(1000); film.on = true; renderFilmChip(); camStatus($('status').textContent, '');
 }
@@ -707,7 +714,7 @@ function autoSaveIfNeeded() {
     delay: +T.delay.toFixed(2), par: S.par || null, acoustic: T.acoustic, sens: S.sens,
     shots: T.shots.map((s) => ({ t: +s.t.toFixed(4), removed: s.removed || undefined })),
   };
-  history.unshift(rec); saveHistory(); T.saved = rec.id;
+  history.unshift(tagRecord(rec)); saveHistory(); T.saved = rec.id; renderSession();
   $('btn-review').textContent = 'Saved ✓'; $('btn-review').disabled = true; renderHistory();
 }
 function updateSaved() {
@@ -727,6 +734,16 @@ function renderHistory() {
     `<div><span class="k">${esc(S.shooter)} · best draw (live)</span><span class="v">${fmt(best(mine.map((s) => s.first)))}</span></div>` +
     `<div><span class="k">Best split</span><span class="v">${fmt(best(mine.map((s) => s.best).filter((x) => x != null)))}</span></div>` +
     `<div><span class="k">Best dry draw · ${dry.length} reps</span><span class="v">${fmt(best(dry))}</span></div>`;
+  const sesBox = document.createElement('div'); sesBox.className = 'ses-list';
+  for (const ses of sessions.slice(0, 20)) {
+    const c = document.createElement('div'); c.className = 'card ses';
+    c.innerHTML = `<div class="top"><span class="who">${ses.id === activeSession ? '● ' : ''}${esc(ses.name)}</span><span class="when">${new Date(ses.start).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span></div>
+      <div class="hint">${sessionLine(ses)}</div><div class="ses-btns"><button class="btn ghost small exp">Export session</button><button class="btn ghost small del">Delete</button></div>`;
+    c.querySelector('.exp').onclick = () => exportSession(ses.id);
+    c.querySelector('.del').onclick = () => { if (confirm(`Delete session "${ses.name}"? Its reps stay in History.`)) { sessions = sessions.filter((x) => x !== ses); if (activeSession === ses.id) activeSession = null; history.forEach((h) => { if (h.session === ses.id) delete h.session; }); saveHistory(); saveSessions(); renderSession(); renderHistory(); } };
+    sesBox.appendChild(c);
+  }
+  if (sessions.length) { const h = document.createElement('div'); h.className = 'day'; h.textContent = 'Sessions'; el.appendChild(h); el.appendChild(sesBox); }
   let day = '';
   for (const r of history) {
     const d = new Date(r.at), ds = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
@@ -760,13 +777,51 @@ function renderHistory() {
 }
 function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
-function exportCsv() {
-  const rows = [['date', 'mode', 'shooter', 'gun', 'shot', 'time_s', 'split_s', 'reaction_s', 'par_s', 'delay_s']];
-  for (const r of history.slice().reverse()) recShots(r).forEach((t, i, a) => rows.push([r.at, r.mode === 'dry' ? 'dry-' + (r.drill || 'trigger') : 'range', r.shooter, r.gun, i + 1, t.toFixed(4), i ? (t - a[i - 1]).toFixed(4) : '', i === 0 && r.react != null ? r.react.toFixed(4) : '', r.par || '', r.delay]));
-  const csv = rows.map((r) => r.map((v) => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v).join(',')).join('\n');
-  const blob = new Blob([csv], { type: 'text/csv' }), url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = `shot-timer-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
+function csvOf(records) {
+  const rows = [['date', 'session', 'mode', 'shooter', 'gun', 'shot', 'time_s', 'split_s', 'reaction_s', 'reload_s', 'par_s', 'delay_s', 'sens', 'click_match']];
+  for (const r of records.slice().reverse()) recShots(r).forEach((t, i, a) => rows.push([r.at, r.session ? (sessions.find((x) => x.id === r.session) || {}).name || r.session : '',
+    r.mode === 'dry' ? 'dry-' + (r.drill || 'trigger') : 'range', r.shooter, r.gun, i + 1, t.toFixed(4), i ? (t - a[i - 1]).toFixed(4) : '',
+    i === 0 && r.react != null ? r.react.toFixed(4) : '', i === 1 && r.reload != null ? r.reload.toFixed(4) : '', r.par || '', r.delay,
+    r.cfg ? (r.mode === 'dry' ? r.cfg.drySens : r.cfg.sens) : '', r.cfg && r.mode === 'dry' ? r.cfg.clickMatch : '']));
+  return rows.map((r) => r.map((v) => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v).join(',')).join('\n');
+}
+async function shareFiles(files) {
+  try { if (navigator.canShare && navigator.canShare({ files })) { await navigator.share({ files }); return; } } catch (e) { if (e.name === 'AbortError') return; }
+  for (const f of files) { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; a.click(); }
+}
+function exportCsv() { shareFiles([new File([csvOf(history)], `shot-timer-all-${new Date().toISOString().slice(0, 10)}.csv`, { type: 'text/csv' })]); }
+
+// ---------- sessions: everything between Start and End is tagged, and exported on its own ----------
+function startSession() {
+  const d = new Date(), def = `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
+  const name = (prompt('Session name (e.g. "Dry fire – draws" or "Range day")', def) || '').trim(); if (!name) return;
+  const ses = { id: 's' + Date.now().toString(36), name, start: d.toISOString(), end: null, cfgStart: cfgSnap() };
+  sessions.unshift(ses); activeSession = ses.id; saveSessions(); renderSession();
+}
+function endSession() {
+  const ses = sessions.find((x) => x.id === activeSession); activeSession = null;
+  if (ses) { ses.end = new Date().toISOString(); ses.cfgEnd = cfgSnap(); }
+  saveSessions(); renderSession(); renderHistory();
+  if (ses) { $('ses-dlg-info').textContent = sessionLine(ses); $('ses-dlg').dataset.id = ses.id; $('ses-dlg').showModal(); }
+}
+function sessionRecs(id) { return history.filter((h) => h.session === id); }
+function sessionLine(ses) {
+  const recs = sessionRecs(ses.id), dry = recs.filter((r) => r.mode === 'dry').length;
+  const mins = ses.end ? Math.round((new Date(ses.end) - new Date(ses.start)) / 60000) : null;
+  return `${recs.length - dry} range strings · ${dry} dry reps${mins != null ? ` · ${mins} min` : ''}`;
+}
+function exportSession(id) {
+  const ses = sessions.find((x) => x.id === id); if (!ses) return;
+  const recs = sessionRecs(id), base = `session-${ses.name.replace(/[^\w-]+/g, '_').slice(0, 40)}`;
+  const json = { kind: 'shot-timer-session', version: 1, build: BUILD, session: ses, records: recs };
+  shareFiles([new File([csvOf(recs)], base + '.csv', { type: 'text/csv' }), new File([JSON.stringify(json, null, 1)], base + '.json', { type: 'application/json' })]);
+}
+function renderSession() {
+  const bar = $('ses-bar'); if (!bar) return;
+  const ses = sessions.find((x) => x.id === activeSession);
+  bar.classList.toggle('on', !!ses);
+  $('ses-text').textContent = ses ? `● ${ses.name} · ${sessionRecs(ses.id).length} saved` : 'No session';
+  $('btn-ses').textContent = ses ? 'End session' : 'Start session';
 }
 
 // ---------- shooter / gun pickers ----------
@@ -852,6 +907,9 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('#seg-mode button').forEach((b) => b.onclick = () => setMode(b.dataset.mode));
   document.querySelectorAll('#seg-rep button').forEach((b) => b.onclick = () => { if (T.state === 'standby' || T.state === 'live' || T.state === 'reholster') return; S.dryRepeat = b.dataset.rep === 'repeat'; saveSettings(); setMode('dry'); });
   $('btn-export').onclick = exportCsv;
+  $('btn-ses').onclick = () => (activeSession ? endSession() : startSession());
+  $('btn-ses-export').onclick = (e) => { e.preventDefault(); exportSession($('ses-dlg').dataset.id); };
+  $('btn-ses-close').onclick = () => $('ses-dlg').close(); renderSession();
   $('chip-film').onclick = toggleFilm; $('btn-film-share').onclick = (e) => { e.preventDefault(); shareFilm(); };
   $('btn-film-close').onclick = () => { film.result = null; $('film-dlg').close(); };
   const cf = $('set-cam'); cf.value = S.camFacing; cf.onchange = () => { S.camFacing = cf.value; saveSettings(); };

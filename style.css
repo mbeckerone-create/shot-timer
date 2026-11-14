@@ -112,3 +112,35 @@ body.filming .camwrap { display: block; }
 .cam-ev.click { color: var(--ok); } .cam-ev.holster { color: #7cc4ff; } .cam-ev.rep { color: #fff; font-size: 13px; } .cam-ev.no { color: #999; }
 .cam-rec { position: absolute; top: 8px; right: 10px; color: var(--bad); font-weight: 800; font-size: 13px; }
 #film-dlg .btn { margin-top: 8px; }
+
+/* sessions */
+.ses-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 6px 6px 6px 12px; margin-bottom: 10px; font-size: 14px; color: var(--muted); }
+.ses-bar.on { border-color: var(--ok); color: var(--text); }
+.ses-bar.on #ses-text { color: var(--ok); font-weight: 700; }
+.ses-btns { display: flex; gap: 8px; margin-top: 8px; }
+/* film mode: full-screen camera behind see-through controls */
+body.filming .camwrap { position: fixed; inset: 0; max-height: none; aspect-ratio: auto; border-radius: 0; margin: 0; z-index: 0; }
+body.filming #app { position: relative; z-index: 1; background: transparent; }
+body.filming, body.filming .view.active { background: transparent; }
+body.filming html { background: #000; }
+body.filming .readout, body.filming .seg, body.filming .chip, body.filming .ses-bar, body.filming .tabs { background: rgba(10, 12, 15, .55); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); border-color: rgba(255,255,255,.15); }
+body.filming .readout { padding: 10px; }
+body.filming .big { font-size: clamp(48px, 15vw, 84px); margin: 0 0 6px; }
+body.filming .shotlist { max-height: 18vh; background: rgba(10, 12, 15, .45); border-radius: 12px; }
+body.filming .cam-over { top: 46%; bottom: auto; padding: 10px 14px; }
+body.filming .cam-status { display: none; }
+body.filming .cam-ev { font-size: 15px; } body.filming .cam-ev.rep { font-size: 17px; }
+body.filming .cam-rec { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 4px); right: 14px; z-index: 2; }
+body.filming #view-timer > *:not(.camwrap):not(.controls) { position: relative; z-index: 1; }
+body.filming .controls { position: relative; z-index: 1; }
+body.filming #view-timer .shotlist { flex: 0 1 auto; }
+body.filming #view-timer .controls { margin-top: 0; }
+
+/* film mode, compact: camera stays visible in the middle; readout sits just above the controls */
+body.filming #seg-mode, body.filming #seg-drill, body.filming #seg-rep, body.filming .ses-bar, body.filming .shotlist, body.filming .cam-rec { display: none !important; }
+body.filming .readout { margin-top: auto; margin-bottom: 10px; }
+body.filming .readout .stats .v { font-size: 14px; }
+body.filming .readout .meter, body.filming #beepinfo { display: none; }
+body.filming .bar .chip:not(.film) { opacity: .85; }
+body.filming .cam-over { top: 18%; }
+body.filming .cam-ev { font-size: 17px; } body.filming .cam-ev.rep { font-size: 19px; }
