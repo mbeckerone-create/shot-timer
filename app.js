@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.6.0';
+const BUILD = 'v0.6.1';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -295,7 +295,7 @@ function stop() {
 // comes before the click. A click-like snap with nothing before it is held for up to 1.4 s: if another click-like
 // snap follows, the first was the holster. The holster is the loudest snap 0.25–2.0 s before the click.
 // With no holster fingerprint at all this times 14/14 filmed reps right (the old rule: 0/14).
-const PROMOTE_S = 1.4, MIN_SPLIT = 0.35;   // filmed holster→click splits: 0.57–1.0 s
+const PROMOTE_S = 1.4, MIN_SPLIT = 0.35, MIN_SNAP_S = 0.25, MIN_SHOT_S = 0.5;   // filmed holster→click splits: 0.57–1.0 s
 function onDrySound(c, j) {
   if (film.on) { filmLog('judged', { t: +c.t.toFixed(4), db: +c.db.toFixed(1), kind: j.kind, score: +j.score.toFixed(3), hol: +j.hol.toFixed(3), reason: j.reason }); camEvent(j.kind ? `${j.kind.toUpperCase()} ${fmt(c.t)}` : `${{ sound: 'not the click', quiet: 'too quiet', double: 'double snap' }[j.reason] || j.reason} ${fmt(c.t)}`, j.kind || 'no'); }
   const rep = T.rep, drill = S.dryDrill;
@@ -303,6 +303,10 @@ function onDrySound(c, j) {
   if (!j.kind) return note(j.reason);
   if (drill === 'trigger') return j.kind === 'click' ? acceptShot(c, j.score) : note('holster');
   const timingFirst = !rep.clicks.length;                            // draw shot, or reload shot 1
+  // Physically impossible timings (filmed rep: gun still in hand at the beep, a handling click at 0.15 s):
+  // nothing under 0.25 s counts, and a draw/first shot under 0.5 s is rejected.
+  if (timingFirst && c.t < MIN_SNAP_S) return note('too early');
+  if (timingFirst && j.kind === 'click' && c.t < MIN_SHOT_S && !rep.tentative && !rep.snaps.length) return note('too fast');
   if (!timingFirst) {                                                // reload: waiting for shot 2
     if (j.kind !== 'click') return note(j.kind);
     if (c.t - rep.clicks[0].t < 0.4) return note('too soon');
@@ -668,7 +672,7 @@ function renderShots() {
     const head = document.createElement('li'); head.className = 'head';
     const dr = S.dryDrill;
     head.innerHTML = `<span>Rep</span><span>${dr === 'reload' ? 'Reload' : dr === 'draw' ? 'Shot' : 'Draw'}</span><span class="sp">${dr === 'reload' ? '1st shot' : dr === 'draw' ? 'React · split' : 'Match'}</span><span></span>`; ol.appendChild(head);
-    const why = { sound: 'not the click', quiet: 'too quiet', double: 'double snap', holster: 'holster', 'too soon': 'too soon', 'snap…': 'snap… (holster or shot?)' };
+    const why = { sound: 'not the click', quiet: 'too quiet', double: 'double snap', holster: 'holster', 'too soon': 'too soon', 'snap…': 'snap… (holster or shot?)', 'too early': 'too early', 'too fast': 'too fast for a draw' };
     for (const q of (T.state === 'live' ? T.ignored : [])) {
       const li = document.createElement('li'); li.className = q.mark ? '' : 'removed';
       li.innerHTML = `<span class="n"></span><span class="t">${fmt(q.t)}</span><span class="sp">${why[q.reason] || q.reason}</span><span></span>`; ol.appendChild(li);

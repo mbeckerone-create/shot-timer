@@ -44,6 +44,12 @@ def ts(t):
 
 def main(video, log_path, out):
     log = json.load(open(log_path)); x, sr = audio(video)
+    w, h = map(int, subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height:stream_side_data=rotation',
+        '-of', 'csv=p=0', video], capture_output=True, text=True).stdout.split('\n')[0].split(',')[:2])
+    rot = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream_side_data=rotation', '-of', 'csv=p=0', video],
+                         capture_output=True, text=True).stdout.strip().split('\n')[0]
+    if rot.lstrip('-').split('.')[0] in ('90', '270'): w, h = h, w      # phone clips are stored sideways + a rotate flag
+    out_w, out_h = (720, 1280) if h > w else (1280, 720)
     hz = log['settings'].get('beepHz', 2400); t0 = log.get('recStartCtx') or 0
     reps, cur = [], None
     for e in log['events']:
@@ -51,10 +57,10 @@ def main(video, log_path, out):
         elif cur is None: continue
         elif e['type'] == 'judged': cur['events'].append(e)
         elif e['type'] in ('rep', 'string'): cur['result'] = e
-    style = ('[Script Info]\nScriptType: v4.00+\nPlayResX: 1280\nPlayResY: 720\n\n[V4+ Styles]\n'
+    style = (f'[Script Info]\nScriptType: v4.00+\nPlayResX: {out_w}\nPlayResY: {out_h}\n\n[V4+ Styles]\n'
              'Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV\n'
-             'Style: Big,DejaVu Sans Mono,54,&H00FFFFFF,&H00000000,1,3,0,7,30,30,24\n'
-             'Style: Ev,DejaVu Sans Mono,38,&H00FFFFFF,&H00000000,1,3,0,1,30,30,30\n\n'
+             'Style: Big,DejaVu Sans Mono,46,&H00FFFFFF,&H00000000,1,3,0,7,30,30,24\n'
+             'Style: Ev,DejaVu Sans Mono,26,&H00FFFFFF,&H00000000,1,3,0,1,30,30,30\n\n'
              '[Events]\nFormat: Layer, Start, End, Style, Text\n')
     col = {'click': '&H0084DC3D&', 'holster': '&H00FFC47C&', None: '&H00999999&'}
     lines = []
@@ -73,7 +79,7 @@ def main(video, log_path, out):
                   (f"  RELOAD {res['reload']:.3f}" if res.get('reload') is not None else '')
             lines.append(f'Dialogue: 0,{ts(b + res["t"] + 0.35)},{ts(b + res["t"] + 3.5)},Big,{txt}')
     ass = tempfile.mktemp(suffix='.ass'); open(ass, 'w').write(style + '\n'.join(lines) + '\n')
-    subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', video, '-vf', f'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,ass={ass}',
+    subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', video, '-vf', f'scale={out_w}:{out_h}:force_original_aspect_ratio=decrease,pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2,ass={ass}',
                     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-c:a', 'aac', out], check=True)
     os.remove(ass); print(f'{len(reps)} reps rendered -> {out}')
 
