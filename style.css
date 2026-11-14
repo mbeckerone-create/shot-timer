@@ -162,3 +162,15 @@ body.filming .cam-ev { font-size: 17px; } body.filming .cam-ev.rep { font-size: 
 .drill-head .seg { margin: 0; width: 150px; flex: 0 0 auto; }
 body.filming .drill-head { position: relative; z-index: 1; background: rgba(10,12,15,.55); border-radius: 12px; padding: 4px 6px; }
 body.filming #seg-rep { display: grid !important; }
+
+/* v0.7: session detail, clip reminder */
+.card.tap { cursor: pointer; }
+.ses-detail h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 6px; }
+.ses-detail .summary { margin-top: 10px; }
+.srow { border-top: 1px solid var(--line); padding: 10px 2px; }
+.srow .top { display: flex; justify-content: space-between; gap: 8px; } .srow .when { color: var(--muted); font-size: 13px; }
+.srow .mono { font-family: var(--mono); font-size: 13px; color: var(--muted); margin-top: 4px; line-height: 1.5; }
+.srow .off { text-decoration: line-through; opacity: .55; }
+.ses-detail .live { color: var(--ok); } .ses-detail .warn { color: var(--bad); }
+.clip-note { margin-top: 12px; width: 100%; text-align: left; background: var(--panel); border: 1px solid var(--bad); color: var(--text); border-radius: 12px; padding: 12px; font: inherit; font-size: 14px; }
+.home-build { margin-top: auto; text-align: center; opacity: .6; }

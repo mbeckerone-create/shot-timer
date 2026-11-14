@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.6.2';
+const BUILD = 'v0.7.0';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -11,6 +11,7 @@ const DEFAULT_SETTINGS = {
   sens: 5, echo: 180, lock: 100, auto: 4,
   audioMode: 'play-and-record', beepOut: 'webaudio',
   mode: 'range',                                   // 'range' (live fire) | 'dry' (dry fire draws)
+  gate: 10, rangeRepeat: false, rangeReset: 5,      // gate: ignore sounds this many dB quieter than your own shots (0 = off)
   drySens: 7, dryRepeat: false, dryReholster: 5, dryTimeout: 5, clickMatch: 0.9, clickTpl: null, clickInfo: null,
   dryDrill: 'trigger',                             // 'trigger' (click only) | 'draw' (holster snap → click) | 'reload' (click → reload → click)
   holTpl: null, holInfo: null, reloadTimeout: 10,
@@ -35,10 +36,11 @@ const saveHistory = () => store.set('st.history', history);
 const saveSessions = () => { store.set('st.sessions', sessions); store.set('st.activeSession', activeSession); };
 // settings that shape a result: stored on every record made in a session, and on the session itself
 const cfgSnap = () => ({ mode: S.mode, drill: S.dryDrill, sens: S.sens, drySens: S.drySens, clickMatch: S.clickMatch, echo: S.echo, lock: S.lock, par: S.par, dmin: S.dmin, dmax: S.dmax,
-  beepHz: S.hz, beepMs: S.blen, repeat: S.dryRepeat, shooter: S.shooter, gun: S.gun, clickLearned: S.clickInfo ? S.clickInfo.at : null, holsterLearned: S.holInfo ? S.holInfo.at : null });
+  beepHz: S.hz, beepMs: S.blen, repeat: S.mode === 'dry' ? S.dryRepeat : S.rangeRepeat, gate: S.gate, shooter: S.shooter, gun: S.gun, clickLearned: S.clickInfo ? S.clickInfo.at : null, holsterLearned: S.holInfo ? S.holInfo.at : null });
 function tagRecord(r) { if (activeSession) { r.session = activeSession; r.cfg = cfgSnap(); } return r; }
 
 const isDry = () => S.mode === 'dry';
+const repeatOn = () => (isDry() ? S.dryRepeat : S.rangeRepeat);
 const drySensToDb = (s) => -30 - (s - 1) * 3;          // dry fire: 1:-30 dB … 7:-48 dB … 10:-57 dB (just above room noise)
 function detParams() {
   if (isDry()) return { shotDb: drySensToDb(S.drySens), echoMs: 0, lockMs: 60 };   // short lock: see both halves of a rack
@@ -187,7 +189,8 @@ async function onMain() {
     if (T.state === 'idle' || T.state === 'done') { T.seriesOn = S.dryRepeat; T.series = []; return start(); }
     return stopSeries();                                 // standby / live / reholster: end the drill
   }
-  if (T.state === 'idle' || T.state === 'done') return start();
+  if (T.state === 'idle' || T.state === 'done') { T.seriesOn = S.rangeRepeat; T.series = []; return start(); }
+  if (T.seriesOn) return stopSeries();                    // repeat strings: STOP ends the whole run
   if (T.state === 'standby') return cancel();
   if (T.state === 'live') return stop();
 }
@@ -216,9 +219,9 @@ async function start() {
   if (S.par > 0) { parAt.push(beepAt + S.par); T.oscs.push(scheduleBeep(beepAt + S.par, S.blen)); }
   audio.node.port.postMessage({ type: 'params', params: detParams() });
   audio.node.port.postMessage({ type: 'arm', beepAt, parAt, beepMs: S.blen, beepHz: S.hz, latency: latencyEstimate() });
-  T.state = 'standby'; setStatus(isDry() ? (T.seriesOn ? `Rep ${T.series.length + 1} · standby` : 'Standby') : 'Standby', 'standby'); $('big').textContent = '0.000';
+  T.state = 'standby'; setStatus(T.seriesOn ? `${isDry() ? 'Rep' : 'String'} ${T.series.length + 1} · standby` : 'Standby', 'standby'); $('big').textContent = '0.000';
   $('beepinfo').textContent = '';
-  setMain(isDry() && T.seriesOn ? 'STOP' : 'CANCEL', 'standby'); if (!isDry()) $('btn-review').disabled = true;
+  setMain(T.seriesOn ? 'STOP' : 'CANCEL', 'standby'); if (!isDry()) $('btn-review').disabled = true;
   T.beepAt = beepAt; cancelAnimationFrame(T.raf); T.raf = requestAnimationFrame(tick);
   requestWake();
 }
@@ -251,8 +254,8 @@ function goLive() {
   T.autoTimer = setInterval(() => {
     if (T.state !== 'live') return clearInterval(T.autoTimer);
     const quiet = (performance.now() - T.lastActivity) / 1000;
-    const lim = S.auto > 0 ? S.auto : 120;
-    if (quiet > lim && (T.shots.length || quiet > 30)) stop();
+    const lim = S.auto > 0 ? S.auto : T.seriesOn ? 4 : 120;          // repeat strings always end on their own
+    if (quiet > lim && (liveShots().length || quiet > (T.seriesOn ? 15 : 30))) stop();
   }, 250);
 }
 
@@ -265,11 +268,24 @@ function addShot(frame, db, bands) {
     setTimeout(() => { if (T.state === 'live') onDrySound(c, judgeSound(c, T.dryEvents)); }, (ISO_S + 0.05) * 1000);
     return;
   }
-  T.shots.push({ t: (frame - T.beepFrame) / audio.sr, db, removed: false });
-  T.shots.sort((a, b) => a.t - b.t);
-  T.lastActivity = performance.now(); renderShots(); renderStats(); renderDiag();
+  const shot = { t: (frame - T.beepFrame) / audio.sr, db, removed: false }; T.shots.push(shot);
+  T.shots.sort((a, b) => a.t - b.t); applyGate();
+  if (!shot.removed) T.lastActivity = performance.now();   // quiet bangs (other lanes) don't keep the string open
+  renderShots(); renderStats(); renderDiag();
 }
 
+// Own-gun gate: your gun is by far the loudest thing the phone hears (about -3 dB on the range clip of Nov 14);
+// other lanes and echoes were 11-40 dB quieter. Sounds more than S.gate dB below the loudest shot of the string are
+// struck out (tap ↺ to keep one). Checked on 30 filmed reps: keeps every shot of yours, drops the rest.
+function applyGate() {
+  if (!(S.gate > 0)) { for (const q of T.shots) if (q.auto === 'quiet') { q.removed = false; delete q.auto; } return; }
+  const top = Math.max(...T.shots.map((q) => q.db));
+  for (const q of T.shots) {
+    if (q.keep) continue;
+    const quiet = q.db < top - S.gate;
+    if (quiet && !q.removed) { q.removed = true; q.auto = 'quiet'; } else if (!quiet && q.auto === 'quiet') { q.removed = false; delete q.auto; }
+  }
+}
 function cancel() {
   clearTimeout(T.elTimer); if (beepEl) beepEl.pause();
   for (const o of T.oscs) { try { o.stop(); } catch {} }
@@ -279,14 +295,23 @@ function cancel() {
 }
 
 function stop() {
-  if (film.on) filmLog('string', { shots: T.shots.map((q) => ({ t: +q.t.toFixed(4), db: +q.db.toFixed(1) })) });
+  if (film.on) filmLog('string', { shots: T.shots.map((q) => ({ t: +q.t.toFixed(4), db: +q.db.toFixed(1), gated: q.auto === 'quiet' || undefined })) });
   audio.node.port.postMessage({ type: 'disarm' });
   for (const o of T.oscs) { try { o.stop(); } catch {} }
   clearInterval(T.autoTimer); cancelAnimationFrame(T.raf);
-  T.state = 'done'; renderStats(); setStatus(T.shots.length ? 'String done' : 'No shots heard');
-  setMain('START'); $('btn-review').disabled = !T.shots.length; $('btn-review').textContent = 'Save';
-  releaseWake();
+  const n = liveShots().length;
+  T.state = 'done'; renderStats(); setStatus(n ? 'String done' : 'No shots heard');
+  setMain('START'); $('btn-review').disabled = !n; $('btn-review').textContent = 'Save';
   autoSaveIfNeeded();
+  if (T.seriesOn) {                                      // repeat strings: reset, then the next random beep
+    const s = summarize(liveShots()); T.series.push({ t: n ? s.total : null, n });
+    if (n) setStatus(`String ${T.series.length} · ${n} shot${n > 1 ? 's' : ''} · ${fmt(s.total)}`);
+    T.state = 'reholster'; setMain('STOP', 'stop'); let left = S.rangeReset;
+    const tickDown = () => { if (T.state !== 'reholster') return; if (left <= 0) return start();
+      $('beepinfo').textContent = `Reset… next string in ${left} s`; left--; T.nextTimer = setTimeout(tickDown, 1000); };
+    tickDown(); return;
+  }
+  releaseWake();
 }
 
 // ---------- dry fire reps ----------
@@ -382,6 +407,12 @@ function stopSeries() {
     for (const o of T.oscs) { try { o.stop(); } catch {} }
     audio.node.port.postMessage({ type: 'disarm' }); cancelAnimationFrame(T.raf);
   }
+  if (!isDry()) {
+    if (T.state === 'live' && liveShots().length) autoSaveIfNeeded();
+    clearInterval(T.autoTimer); T.state = 'done'; setMain('START'); releaseWake(); $('beepinfo').textContent = '';
+    const done = T.series.filter((r) => r.n), best = done.length ? Math.min(...done.map((r) => r.t)) : null;
+    setStatus(done.length ? `Done · ${done.length} strings · best ${fmt(best)}` : 'Ready'); renderStats(); return;
+  }
   T.state = 'done'; setMain('START'); releaseWake();
   const s = drySummary(); setStatus(s.n ? `Drill done · ${s.n} reps · best ${fmt(S.dryDrill === 'reload' ? s.bestReload : s.best)}` : 'Ready'); $('beepinfo').textContent = '';
   renderStats();
@@ -395,9 +426,9 @@ function drySummary() {
 }
 function saveDryRep(hit) {
   const shots = [{ t: +hit.t.toFixed(4) }]; if (hit.t2 != null) shots.push({ t: +hit.t2.toFixed(4) });
-  history.unshift(tagRecord({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5), mode: 'dry', drill: S.dryDrill, at: new Date().toISOString(),
+  history.unshift(clipTag(tagRecord({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5), mode: 'dry', drill: S.dryDrill, at: new Date().toISOString(),
     shooter: S.shooter, gun: S.gun, delay: +T.delay.toFixed(2), acoustic: T.acoustic, match: +hit.score.toFixed(2),
-    react: hit.react != null ? +hit.react.toFixed(4) : undefined, reload: hit.reload != null ? +hit.reload.toFixed(4) : undefined, shots }));
+    react: hit.react != null ? +hit.react.toFixed(4) : undefined, reload: hit.reload != null ? +hit.reload.toFixed(4) : undefined, shots })));
   saveHistory(); renderSession();
 }
 // ---------- dry fire: teach the trigger click (guided) ----------
@@ -466,7 +497,22 @@ function teachMenu() {
 // The video records the SAME mic track the detector analyses, so its audio is exactly what the app heard.
 // The overlay is live on screen only (burning it into the file would load the phone mid-drill); the JSON log has
 // every sound, fingerprint and decision, so the overlay can be rendered onto the video afterwards.
-const film = { on: false, cam: null, rec: null, chunks: [], log: null, mime: '' };
+const film = { on: false, cam: null, rec: null, chunks: [], log: null, mime: '', name: '' };
+// Clips are written to the phone's storage (IndexedDB) the moment recording stops, so closing the dialog, leaving the
+// app or a crash can't lose one. They stay until you delete them (History › session › Clips).
+const clipDB = {
+  open() { return this.p || (this.p = new Promise((ok, bad) => { const r = indexedDB.open('st-clips', 1); r.onupgradeneeded = () => r.result.createObjectStore('clips', { keyPath: 'name' }); r.onsuccess = () => ok(r.result); r.onerror = () => bad(r.error); })); },
+  async tx(mode, fn) { const db = await this.open(); return new Promise((ok, bad) => { const t = db.transaction('clips', mode), st = t.objectStore('clips'); const r = fn(st); t.oncomplete = () => ok(r && r.result); t.onerror = () => bad(t.error); }); },
+  put(c) { return this.tx('readwrite', (st) => st.put(c)); },
+  get(name) { return this.tx('readonly', (st) => st.get(name)); },
+  del(name) { return this.tx('readwrite', (st) => st.delete(name)); },
+  async list() { return (await this.tx('readonly', (st) => st.getAll())) || []; },
+};
+// One name stem per session, shared by its export and its clips: ST-2026-11-14-1431 (session start, local time).
+function sessionStem(ses) { const d = ses ? new Date(ses.start) : new Date(), z = (n) => String(n).padStart(2, '0'); return `ST-${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}`; }
+function nextClipName() { const ses = sessions.find((x) => x.id === activeSession); const n = ses ? (ses.clips = ses.clips || []).length + 1 : 1; return `${sessionStem(ses)}-clip${n}`; }
+// Records made while filming carry the clip's name and where their beep sits in it, so data and video pair up.
+function clipTag(r) { if (film.on && film.log && film.log.recStartCtx != null) { r.clip = film.name; r.clipT = +(T.beepAt - film.log.recStartCtx).toFixed(2); } return r; }
 function filmLog(type, data) { if (!film.log) return; film.log.events.push(Object.assign({ type, ctx: +(audio.ctx.currentTime).toFixed(4), wall: Date.now() }, data)); }
 async function startFilm() {
   try { await ensureAudio(); } catch { setStatus('Mic blocked', 'err'); return; }
@@ -484,6 +530,8 @@ async function startFilm() {
       clickTpl: S.clickTpl, clickInfo: S.clickInfo, holTpl: S.holTpl, holInfo: S.holInfo, shooter: S.shooter, gun: S.gun },
     session: activeSession, recStartCtx: null, events: [] };
   film.rec.onstart = () => { film.log.recStartCtx = +audio.ctx.currentTime.toFixed(4); film.log.recStartWall = Date.now(); };
+  film.name = nextClipName(); film.log.clip = film.name;
+  const ses = sessions.find((x) => x.id === activeSession); if (ses) { ses.clips.push({ name: film.name, start: new Date().toISOString() }); saveSessions(); }
   film.rec.start(1000); film.on = true; renderFilmChip(); camStatus($('status').textContent, '');
 }
 function stopFilm() {
@@ -492,8 +540,13 @@ function stopFilm() {
     try { film.cam.getTracks().forEach((t) => t.stop()); } catch {}
     document.body.classList.remove('filming'); $('cam').srcObject = null;
     const type = (film.mime || 'video/mp4').split(';')[0], ext = type.includes('webm') ? 'webm' : 'mp4';
-    film.result = { video: new Blob(film.chunks, { type }), ext, type, log: film.log, name: `training-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}` };
-    film.chunks = []; film.log = null; showFilmReady();
+    film.result = { video: new Blob(film.chunks, { type }), ext, type, log: film.log, name: film.name, session: film.log.session, at: new Date().toISOString(), saved: false };
+    const ses = sessions.find((x) => x.id === film.log.session), c = ses && (ses.clips || []).find((x) => x.name === film.name);
+    if (c) { c.end = new Date().toISOString(); saveSessions(); }
+    film.chunks = []; film.log = null;
+    clipDB.put(film.result).then(() => { $('film-kept').textContent = 'Kept on this phone ✓ — find it later in History › session.'; })
+      .catch(() => { $('film-kept').textContent = '⚠ Could not keep a copy on the phone: save it now.'; });
+    showFilmReady();
   };
   if (film.rec && film.rec.state !== 'inactive') { film.rec.onstop = done; film.rec.stop(); } else done();
 }
@@ -508,15 +561,21 @@ function camEvent(txt, kind) {
 function showFilmReady() {
   const r = film.result; if (!r) return;
   const mb = (r.video.size / 1048576).toFixed(1), reps = r.log.events.filter((e) => e.type === 'rep' || e.type === 'string').length;
-  $('film-info').textContent = `${mb} MB video · ${reps} reps/strings · ${r.log.events.filter((e) => e.type === 'sound').length} sounds logged`;
+  $('film-info').textContent = `${r.name}\n${mb} MB video · ${reps} reps/strings · ${r.log.events.filter((e) => e.type === 'sound').length} sounds logged`;
   $('film-dlg').showModal();
 }
-async function shareFilm() {
-  const r = film.result; if (!r) return;
-  const files = [new File([r.video], `${r.name}.${r.ext}`, { type: r.type }), new File([JSON.stringify(r.log)], `${r.name}.json`, { type: 'application/json' })];
-  try { if (navigator.canShare && navigator.canShare({ files })) { await navigator.share({ files, title: r.name }); return; } } catch (e) { if (e.name === 'AbortError') return; }
+// Camera roll: the share sheet's "Save Video" (video alone; with the log attached iOS doesn't offer it).
+// Files / Dropbox: video + log, keeping the clip's name.
+async function shareClip(r, withLog) {
+  if (!r) return;
+  const files = [new File([r.video], `${r.name}.${r.ext}`, { type: r.type })];
+  if (withLog) files.push(new File([JSON.stringify(r.log)], `${r.name}.json`, { type: 'application/json' }));
+  try {
+    if (navigator.canShare && navigator.canShare({ files })) { await navigator.share({ files, title: r.name }); r.saved = true; clipDB.put(r).catch(() => {}); return; }
+  } catch (e) { if (e.name === 'AbortError') return; }
   for (const f of files) { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; a.click(); }
 }
+function shareFilm(withLog) { return shareClip(film.result, withLog); }
 
 function onWorklet(m) {
   if (film.on && (m.type === 'shot' || m.type === 'beep')) filmLog(m.type === 'beep' ? 'beep' : 'sound', m.type === 'beep' ? { frame: m.frame, acoustic: m.acoustic, expected: m.expected } : { frame: m.frame, db: +m.peakDb.toFixed(1), bands: m.bands });
@@ -704,10 +763,10 @@ function renderShots() {
     const li = document.createElement('li'); if (s.removed) li.className = 'removed';
     const split = !s.removed && prev != null ? s.t - prev : null;
     if (!s.removed) { n++; prev = s.t; }
-    li.innerHTML = `<span class="n">${s.removed ? '' : n}</span><span class="t">${fmt(s.t)}</span><span class="sp">${s.removed ? '' : (n === 1 ? 'draw' : fmt(split))}</span>`;
+    li.innerHTML = `<span class="n">${s.removed ? '' : n}</span><span class="t">${fmt(s.t)}</span><span class="sp">${s.removed ? (s.auto === 'quiet' ? 'quieter · not yours?' : '') : (n === 1 ? 'draw' : fmt(split))}</span>`;
     const x = document.createElement('button'); x.className = 'x'; x.textContent = s.removed ? '↺' : '×';
     x.title = s.removed ? 'Restore shot' : 'Not a shot — remove';
-    x.onclick = () => { s.removed = !s.removed; renderShots(); renderStats(); if (T.saved) updateSaved(); };
+    x.onclick = () => { s.removed = !s.removed; if (!s.removed) { s.keep = true; delete s.auto; } renderShots(); renderStats(); if (T.saved) updateSaved(); };
     li.appendChild(x); ol.prepend(li);
   });
   ol.prepend(head);
@@ -726,14 +785,15 @@ function autoSaveIfNeeded() {
   const rec = {
     id: Date.now().toString(36), at: new Date().toISOString(), shooter: S.shooter, gun: S.gun,
     delay: +T.delay.toFixed(2), par: S.par || null, acoustic: T.acoustic, sens: S.sens,
-    shots: T.shots.map((s) => ({ t: +s.t.toFixed(4), removed: s.removed || undefined })),
+    shots: T.shots.map((s) => ({ t: +s.t.toFixed(4), db: +s.db.toFixed(1), removed: s.removed || undefined, gated: s.auto === 'quiet' || undefined })), gate: S.gate,
   };
+  clipTag(rec);
   history.unshift(tagRecord(rec)); saveHistory(); T.saved = rec.id; renderSession();
   $('btn-review').textContent = 'Saved ✓'; $('btn-review').disabled = true; renderHistory();
 }
 function updateSaved() {
   const r = history.find((h) => h.id === T.saved); if (!r) return;
-  r.shots = T.shots.map((s) => ({ t: +s.t.toFixed(4), removed: s.removed || undefined })); saveHistory(); renderHistory();
+  r.shots = T.shots.map((s) => ({ t: +s.t.toFixed(4), db: +s.db.toFixed(1), removed: s.removed || undefined, gated: s.auto === 'quiet' || undefined })); saveHistory(); renderHistory();
 }
 function recShots(r) { return r.shots.filter((s) => !s.removed).map((s) => s.t); }
 
@@ -752,7 +812,9 @@ function renderHistory() {
   for (const ses of sessions.slice(0, 20)) {
     const c = document.createElement('div'); c.className = 'card ses';
     c.innerHTML = `<div class="top"><span class="who">${ses.id === activeSession ? '● ' : ''}${esc(ses.name)}</span><span class="when">${new Date(ses.start).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span></div>
-      <div class="hint">${sessionLine(ses)}</div><div class="ses-btns"><button class="btn ghost small exp">Export session</button><button class="btn ghost small del">Delete</button></div>`;
+      <div class="hint">${sessionLine(ses)}</div><div class="ses-btns"><button class="btn small open">Open ›</button><button class="btn ghost small exp">Export</button><button class="btn ghost small del">Delete</button></div>`;
+    c.classList.add('tap'); c.onclick = (e) => { if (!e.target.closest('button')) openSession(ses.id); };
+    c.querySelector('.open').onclick = () => openSession(ses.id);
     c.querySelector('.exp').onclick = () => exportSession(ses.id);
     c.querySelector('.del').onclick = () => { if (confirm(`Delete session "${ses.name}"? Its reps stay in History.`)) { sessions = sessions.filter((x) => x !== ses); if (activeSession === ses.id) activeSession = null; history.forEach((h) => { if (h.session === ses.id) delete h.session; }); saveHistory(); saveSessions(); renderSession(); renderHistory(); } };
     sesBox.appendChild(c);
@@ -809,13 +871,13 @@ function exportCsv() { shareFiles([new File([csvOf(history)], `shot-timer-all-${
 function startSession(auto) {
   const d = new Date(), def = `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
   const name = auto ? `${auto} · ${def}` : (prompt('Session name', def) || '').trim(); if (!name) return;
-  const ses = { id: 's' + Date.now().toString(36), name, start: d.toISOString(), end: null, cfgStart: cfgSnap() };
+  const ses = { id: 's' + Date.now().toString(36), name, start: d.toISOString(), end: null, cfgStart: cfgSnap(), clips: [] };
   sessions.unshift(ses); activeSession = ses.id; saveSessions(); renderSession();
 }
 function endSession() {
   const ses = sessions.find((x) => x.id === activeSession); activeSession = null;
   if (ses) { ses.end = new Date().toISOString(); ses.cfgEnd = cfgSnap(); }
-  if (ses && !sessionRecs(ses.id).length) sessions = sessions.filter((x) => x !== ses);   // nothing saved: drop it quietly
+  if (ses && !sessionRecs(ses.id).length && !(ses.clips || []).length) sessions = sessions.filter((x) => x !== ses);   // nothing saved: drop it quietly
   saveSessions(); renderSession(); renderHistory();
   if (ses && sessions.includes(ses)) { $('ses-dlg-info').textContent = `${ses.name}\n${sessionLine(ses)}`; $('ses-dlg').dataset.id = ses.id; $('ses-dlg').showModal(); }
 }
@@ -827,9 +889,61 @@ function sessionLine(ses) {
 }
 function exportSession(id) {
   const ses = sessions.find((x) => x.id === id); if (!ses) return;
-  const recs = sessionRecs(id), base = `session-${ses.name.replace(/[^\w-]+/g, '_').slice(0, 40)}`;
+  const recs = sessionRecs(id), base = `${sessionStem(ses)}-session`;
   const json = { kind: 'shot-timer-session', version: 1, build: BUILD, session: ses, records: recs };
   shareFiles([new File([csvOf(recs)], base + '.csv', { type: 'text/csv' }), new File([JSON.stringify(json, null, 1)], base + '.json', { type: 'application/json' })]);
+}
+// Session detail: everything shot in the session, newest first, plus its clips.
+async function openSession(id) {
+  const ses = sessions.find((x) => x.id === id); if (!ses) return;
+  const recs = sessionRecs(id), d = new Date(ses.start), box = $('ses-detail');
+  $('ses-title').textContent = ses.name;
+  const mins = Math.round(((ses.end ? new Date(ses.end) : new Date()) - d) / 60000);
+  const range = recs.filter((r) => r.mode !== 'dry'), dry = recs.filter((r) => r.mode === 'dry');
+  const sums = range.map((r) => summarize(recShots(r))).filter((q) => q.count), best = (a) => (a.length ? Math.min(...a) : null);
+  const firsts = sums.map((q) => q.first), splits = sums.flatMap((q) => q.splits);
+  let h = `<div class="hint">${d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} · ${mins} min${ses.id === activeSession ? ' · <b class="live">in progress</b>' : ''}</div>
+    <div class="summary"><div><span class="k">Range strings</span><span class="v">${range.length}</span></div><div><span class="k">Shots</span><span class="v">${sums.reduce((a, q) => a + q.count, 0)}</span></div>
+    <div><span class="k">Best first shot</span><span class="v">${fmt(best(firsts))}</span></div><div><span class="k">Best split</span><span class="v">${fmt(best(splits))}</span></div>
+    ${dry.length ? `<div><span class="k">Dry reps</span><span class="v">${dry.length}</span></div><div><span class="k">Best dry</span><span class="v">${fmt(best(dry.map((r) => recShots(r)[0]).filter((t) => t != null)))}</span></div>` : ''}</div>`;
+  const clips = ses.clips || [], kept = await clipDB.list().catch(() => []);
+  if (clips.length) {
+    h += `<h2>Clips</h2>`;
+    for (const c of clips) { const k = kept.find((x) => x.name === c.name);
+      h += `<div class="card clip"><div class="top"><span class="who">🎥 ${esc(c.name)}</span><span class="when">${new Date(c.start).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span></div>
+        <div class="hint">${recs.filter((r) => r.clip === c.name).length} strings/reps in this clip${k ? ` · ${(k.video.size / 1048576).toFixed(0)} MB on this phone${k.saved ? ' · shared ✓' : ' · <b class="warn">not saved anywhere yet</b>'}` : ' · not on this phone'}</div>
+        ${k ? `<div class="ses-btns"><button class="btn small" data-roll="${esc(c.name)}">Save to camera roll</button><button class="btn ghost small" data-share="${esc(c.name)}">Clip + log</button><button class="btn ghost small" data-delclip="${esc(c.name)}">Delete</button></div>` : ''}</div>`; }
+  }
+  h += `<h2>Strings &amp; reps</h2>`;
+  if (!recs.length) h += '<div class="empty">Nothing saved in this session yet.</div>';
+  recs.forEach((r, i) => {
+    const ts = recShots(r), when = new Date(r.at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' }), no = recs.length - i;
+    const clip = r.clip ? `<span class="hint"> · ${esc(r.clip.replace(/^.*-/, ''))} @ ${Math.floor(r.clipT / 60)}:${String(Math.floor(r.clipT % 60)).padStart(2, '0')}</span>` : '';
+    if (r.mode === 'dry') {
+      h += `<div class="srow"><div class="top"><b>#${no} ${{ draw: 'Draw', reload: 'Reload' }[r.drill] || 'Trigger'}</b><span class="when">${when}</span></div>
+        <div class="mono">${r.drill === 'reload' ? `shot ${fmt(ts[0])} · reload ${fmt(r.reload)}` : r.drill === 'draw' ? `shot ${fmt(ts[0])} · react ${fmt(r.react)}` : `click ${fmt(ts[0])}`}${clip}</div></div>`;
+      return;
+    }
+    const all = r.shots; let n = 0, prev = null;
+    const rows = all.map((q) => { if (q.removed) return `<span class="off">${fmt(q.t)} ${q.gated ? 'quieter' : 'removed'}</span>`; n++; const sp = prev == null ? 'draw' : '+' + fmt(q.t - prev); prev = q.t; return `${String(n).padStart(2)}  ${fmt(q.t)}  ${sp}`; });
+    h += `<div class="srow"><div class="top"><b>#${no} Range · ${ts.length} shot${ts.length === 1 ? '' : 's'}</b><span class="when">${when}</span></div>
+      <div class="mono">${rows.join('<br>')}${clip ? '<br>' + clip : ''}</div></div>`;
+  });
+  h += `<div class="ses-btns"><button class="btn primary" id="ses-exp">Export session</button></div>`;
+  box.innerHTML = h;
+  $('ses-exp').onclick = () => exportSession(id);
+  const byName = async (n) => (await clipDB.get(n));
+  box.querySelectorAll('[data-roll]').forEach((b) => b.onclick = async () => shareClip(await byName(b.dataset.roll), false).then(() => openSession(id)));
+  box.querySelectorAll('[data-share]').forEach((b) => b.onclick = async () => shareClip(await byName(b.dataset.share), true).then(() => openSession(id)));
+  box.querySelectorAll('[data-delclip]').forEach((b) => b.onclick = async () => { if (confirm(`Delete ${b.dataset.delclip} from this phone? Only do this once it's saved somewhere.`)) { await clipDB.del(b.dataset.delclip); openSession(id); } });
+  showScreen('session');
+}
+// Clips not shared anywhere yet: a reminder on the home screen.
+async function clipReminder() {
+  const el = $('clip-note'); if (!el) return;
+  const list = (await clipDB.list().catch(() => [])).filter((c) => !c.saved);
+  el.hidden = !list.length;
+  if (list.length) { el.textContent = `🎥 ${list.length} clip${list.length > 1 ? 's' : ''} kept on this phone, not saved anywhere yet — tap to see`; el.onclick = () => (list[0].session && sessions.some((x) => x.id === list[0].session) ? openSession(list[0].session) : showScreen('history')); }
 }
 function renderSession() {
   const el = $('ses-text'); if (!el) return;
@@ -843,7 +957,8 @@ function showScreen(v) {
   screen = v;
   document.querySelectorAll('.view').forEach((el) => el.classList.toggle('active', el.id === 'view-' + v));
   const train = ['home', 'drymenu', 'timer'].includes(v);
-  document.querySelectorAll('.tab').forEach((el) => el.classList.toggle('active', train ? el.dataset.view === 'train' : el.dataset.view === v));
+  if (v === 'home') clipReminder();
+  document.querySelectorAll('.tab').forEach((el) => el.classList.toggle('active', train ? el.dataset.view === 'train' : el.dataset.view === (v === 'session' ? 'history' : v)));
   if (v === 'history') renderHistory();
 }
 let lastTrain = 'home';
@@ -856,7 +971,7 @@ function enterDrill(mode, drill) {
 }
 function leaveDrill() {
   if (T.learning) finishLearn();
-  if (isDry() && ['standby', 'live', 'reholster'].includes(T.state)) stopSeries();
+  if ((isDry() || T.seriesOn) && ['standby', 'live', 'reholster'].includes(T.state)) stopSeries();
   else if (T.state === 'standby') cancel(); else if (T.state === 'live') stop();
   const back = isDry() ? 'drymenu' : 'home';
   const finish = () => { endSession(); lastTrain = back; showScreen(back); };
@@ -875,7 +990,7 @@ function pick(title, options, current, cb) {
 function renderChips() { $('lbl-shooter').textContent = S.shooter || '—'; $('lbl-gun').textContent = S.gun || '—'; }
 
 // ---------- settings form ----------
-const NUMS = { 'set-rlto': 'reloadTimeout', 'set-dsens': 'drySens', 'set-rehol': 'dryReholster', 'set-rtime': 'dryTimeout', 'set-match': 'clickMatch', 'set-dmin': 'dmin', 'set-dmax': 'dmax', 'set-hz': 'hz', 'set-blen': 'blen', 'set-par': 'par', 'set-echo': 'echo', 'set-lock': 'lock', 'set-auto': 'auto', 'set-sens': 'sens' };
+const NUMS = { 'set-gate': 'gate', 'set-rreset': 'rangeReset', 'set-rlto': 'reloadTimeout', 'set-dsens': 'drySens', 'set-rehol': 'dryReholster', 'set-rtime': 'dryTimeout', 'set-match': 'clickMatch', 'set-dmin': 'dmin', 'set-dmax': 'dmax', 'set-hz': 'hz', 'set-blen': 'blen', 'set-par': 'par', 'set-echo': 'echo', 'set-lock': 'lock', 'set-auto': 'auto', 'set-sens': 'sens' };
 function bindSettings() {
   for (const [id, k] of Object.entries(NUMS)) {
     const el = $(id); el.value = S[k];
@@ -899,7 +1014,7 @@ function bindSettings() {
   const am = $('set-audiomode'); am.value = S.audioMode;
   am.addEventListener('change', () => { S.audioMode = am.value; saveSettings(); $('audiomode-note').textContent = 'Close and reopen the app for this to take effect.'; });
   $('btn-diag-share').onclick = shareDiag; renderDiag();
-  $('build').textContent = `Build ${BUILD}`;
+  $('build').textContent = `Build ${BUILD}`; const hb = $('home-build'); if (hb) hb.textContent = BUILD;
 }
 
 async function analyzeFile(e) {
@@ -924,12 +1039,12 @@ function setMode(m) {
   if (T.learning || ['standby', 'live', 'reholster'].includes(T.state)) return;     // not mid-string
   S.mode = m; saveSettings(); T.state = 'idle'; T.series = []; T.shots = []; T.ignored = [];
   document.querySelectorAll('#seg-mode button').forEach((b) => b.classList.toggle('on', b.dataset.mode === m));
-  document.querySelectorAll('#seg-rep button').forEach((b) => b.classList.toggle('on', (b.dataset.rep === 'repeat') === S.dryRepeat));
+  document.querySelectorAll('#seg-rep button').forEach((b) => b.classList.toggle('on', (b.dataset.rep === 'repeat') === repeatOn()));
   document.querySelectorAll('#seg-drill button').forEach((b) => b.classList.toggle('on', b.dataset.drill === S.dryDrill));
   document.body.classList.toggle('dry', m === 'dry');
   $('btn-review').textContent = m === 'dry' ? 'Teach…' : 'Save'; $('btn-review').disabled = m !== 'dry';
   const need = !S.clickTpl ? 'teach your trigger click first' : (S.dryDrill !== 'trigger' && !S.holTpl) ? 'teach your holster draw first' : '';
-  setStatus(m === 'dry' ? (need ? `Dry fire · ${need}` : `Dry fire · ${{ trigger: 'trigger', draw: 'draw', reload: 'reload' }[S.dryDrill]} · ready`) : 'Ready'); $('beepinfo').textContent = '';
+  setStatus(m === 'dry' ? (need ? `Dry fire · ${need}` : `Dry fire · ${{ trigger: 'trigger', draw: 'draw', reload: 'reload' }[S.dryDrill]} · ready`) : `Range · listening for gunshots${S.rangeRepeat ? ' · repeat' : ''}`); $('beepinfo').textContent = '';
   if (audio.node) audio.node.port.postMessage({ type: 'params', params: detParams() });
   renderShots(); renderStats(); drawMeter(-120);
 }
@@ -946,7 +1061,8 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-review').onclick = () => (isDry() ? teachMenu() : autoSaveIfNeeded());
   document.querySelectorAll('#seg-drill button').forEach((b) => b.onclick = () => { if (['standby', 'live', 'reholster'].includes(T.state) || T.learning) return; S.dryDrill = b.dataset.drill; saveSettings(); setMode('dry'); });
   document.querySelectorAll('#seg-mode button').forEach((b) => b.onclick = () => setMode(b.dataset.mode));
-  document.querySelectorAll('#seg-rep button').forEach((b) => b.onclick = () => { if (T.state === 'standby' || T.state === 'live' || T.state === 'reholster') return; S.dryRepeat = b.dataset.rep === 'repeat'; saveSettings(); setMode('dry'); });
+  // Single/Repeat belongs to the CURRENT mode. (v0.6 switched to dry fire here, so Range + Repeat listened for clicks.)
+  document.querySelectorAll('#seg-rep button').forEach((b) => b.onclick = () => { if (T.state === 'standby' || T.state === 'live' || T.state === 'reholster') return; const on = b.dataset.rep === 'repeat'; if (isDry()) S.dryRepeat = on; else S.rangeRepeat = on; saveSettings(); setMode(S.mode); });
   $('btn-export').onclick = exportCsv;
   document.querySelectorAll('.menu-btn[data-go]').forEach((b) => b.onclick = () => { if (b.dataset.go === 'range') enterDrill('range'); else { lastTrain = 'drymenu'; showScreen('drymenu'); } });
   document.querySelectorAll('.menu-btn[data-drill]').forEach((b) => b.onclick = () => enterDrill('dry', b.dataset.drill));
@@ -954,8 +1070,11 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-back').onclick = leaveDrill;
   $('btn-ses-export').onclick = (e) => { e.preventDefault(); exportSession($('ses-dlg').dataset.id); };
   $('btn-ses-close').onclick = () => $('ses-dlg').close(); renderSession();
-  $('chip-film').onclick = toggleFilm; $('btn-film-share').onclick = (e) => { e.preventDefault(); shareFilm(); };
+  $('chip-film').onclick = toggleFilm;
+  $('btn-film-roll').onclick = (e) => { e.preventDefault(); shareFilm(false); };
+  $('btn-film-share').onclick = (e) => { e.preventDefault(); shareFilm(true); };
   $('btn-film-close').onclick = () => { film.result = null; $('film-dlg').close(); };
+  $('ses-back').onclick = () => showScreen('history');
   const cf = $('set-cam'); cf.value = S.camFacing; cf.onchange = () => { S.camFacing = cf.value; saveSettings(); };
   $('chip-shooter').onclick = () => pick('Shooter', S.shooters, S.shooter, (v) => { S.shooter = v; saveSettings(); renderChips(); });
   $('chip-gun').onclick = () => pick('Gun', S.guns, S.gun, (v) => { S.gun = v; saveSettings(); renderChips(); });
