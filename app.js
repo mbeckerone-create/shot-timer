@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.3.1';
+const BUILD = 'v0.4.0';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -14,6 +14,7 @@ const DEFAULT_SETTINGS = {
   drySens: 7, dryRepeat: false, dryReholster: 5, dryTimeout: 5, clickMatch: 0.9, clickTpl: null, clickInfo: null,
   dryDrill: 'trigger',                             // 'trigger' (click only) | 'draw' (holster snap → click) | 'reload' (click → reload → click)
   holTpl: null, holInfo: null, reloadTimeout: 10,
+  camFacing: 'user',                               // training film: 'user' (front, you can see the overlay) | 'environment'
   shooters: ['Me'], guns: ['Pistol'], shooter: 'Me', gun: 'Pistol',
 };
 const store = {
@@ -203,6 +204,7 @@ async function start() {
     T.elTimer = setTimeout(() => { beepEl.currentTime = 0; beepEl.play().catch((e) => console.warn('beep element', e)); },
       Math.max(0, (beepAt - audio.ctx.currentTime) * 1000));
   } else T.oscs = [scheduleBeep(beepAt, S.blen)];
+  if (film.on) filmLog('beep_scheduled', { beepAt, mode: S.mode, drill: S.dryDrill, delay: +T.delay.toFixed(3) });
   const parAt = [];
   if (S.par > 0) { parAt.push(beepAt + S.par); T.oscs.push(scheduleBeep(beepAt + S.par, S.blen)); }
   audio.node.port.postMessage({ type: 'params', params: detParams() });
@@ -249,6 +251,7 @@ function goLive() {
 
 function addShot(frame, db, bands) {
   if (frame <= T.beepFrame) return;
+  if (film.on && !isDry()) camEvent(`SHOT ${fmt((frame - T.beepFrame) / audio.sr)}`, 'click');
   if (isDry()) {
     // decide 0.3 s later, once we know whether another snap followed (a rack) — the time is still the click's onset
     const c = { t: (frame - T.beepFrame) / audio.sr, db, bands }; T.dryEvents.push(c);
@@ -269,6 +272,7 @@ function cancel() {
 }
 
 function stop() {
+  if (film.on) filmLog('string', { shots: T.shots.map((q) => ({ t: +q.t.toFixed(4), db: +q.db.toFixed(1) })) });
   audio.node.port.postMessage({ type: 'disarm' });
   for (const o of T.oscs) { try { o.stop(); } catch {} }
   clearInterval(T.autoTimer); cancelAnimationFrame(T.raf);
@@ -286,6 +290,7 @@ function stop() {
 // With no holster fingerprint at all this times 14/14 filmed reps right (the old rule: 0/14).
 const PROMOTE_S = 1.4, MIN_SPLIT = 0.35;   // filmed holster→click splits: 0.57–1.0 s
 function onDrySound(c, j) {
+  if (film.on) { filmLog('judged', { t: +c.t.toFixed(4), db: +c.db.toFixed(1), kind: j.kind, score: +j.score.toFixed(3), hol: +j.hol.toFixed(3), reason: j.reason }); camEvent(j.kind ? `${j.kind.toUpperCase()} ${fmt(c.t)}` : `${{ sound: 'not the click', quiet: 'too quiet', double: 'double snap' }[j.reason] || j.reason} ${fmt(c.t)}`, j.kind || 'no'); }
   const rep = T.rep, drill = S.dryDrill;
   const note = (reason) => { T.ignored.push({ t: c.t, db: c.db, score: j.score, reason }); renderShots(); };
   if (!j.kind) return note(j.reason);
@@ -330,6 +335,7 @@ function repTimeout() {
   endRep(repResult());
 }   // reload with only one shot keeps the shot, no reload time
 function endRep(hit) {
+  if (film.on) { filmLog('rep', { drill: S.dryDrill, result: hit }); if (hit) camEvent(`REP · shot ${fmt(hit.t)}${hit.react != null ? ` · react ${fmt(hit.react)}` : ''}${hit.reload != null ? ` · reload ${fmt(hit.reload)}` : ''}`, 'rep'); }
   clearTimeout(T.repTimer); if (T.rep) clearTimeout(T.rep.tTimer); audio.node.port.postMessage({ type: 'disarm' });
   for (const o of T.oscs) { try { o.stop(); } catch {} }
   cancelAnimationFrame(T.raf);
@@ -435,7 +441,64 @@ function teachMenu() {
   pick('Teach which sound?', ['Trigger click', 'Holster draw'], '', (v) => startLearn(v === 'Holster draw' ? 'holster' : 'click'));
 }
 
+// ---------- training film: camera + the detector's own mic + a log of every decision ----------
+// The video records the SAME mic track the detector analyses, so its audio is exactly what the app heard.
+// The overlay is live on screen only (burning it into the file would load the phone mid-drill); the JSON log has
+// every sound, fingerprint and decision, so the overlay can be rendered onto the video afterwards.
+const film = { on: false, cam: null, rec: null, chunks: [], log: null, mime: '' };
+function filmLog(type, data) { if (!film.log) return; film.log.events.push(Object.assign({ type, ctx: +(audio.ctx.currentTime).toFixed(4), wall: Date.now() }, data)); }
+async function startFilm() {
+  try { await ensureAudio(); } catch { setStatus('Mic blocked', 'err'); return; }
+  try {
+    film.cam = await navigator.mediaDevices.getUserMedia({ video: { facingMode: S.camFacing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false });
+  } catch (e) { setStatus('Camera blocked', 'err'); $('beepinfo').textContent = 'Allow camera access to film training clips.'; return; }
+  const v = $('cam'); v.srcObject = film.cam; v.classList.toggle('mirror', S.camFacing === 'user'); v.play().catch(() => {});
+  document.body.classList.add('filming');
+  const stream = new MediaStream([...film.cam.getVideoTracks(), ...audio.stream.getAudioTracks()]);
+  film.mime = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm'].find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) || '';
+  film.chunks = []; film.rec = new MediaRecorder(stream, film.mime ? { mimeType: film.mime, videoBitsPerSecond: 2500000 } : undefined);
+  film.rec.ondataavailable = (e) => { if (e.data && e.data.size) film.chunks.push(e.data); };
+  film.log = { kind: 'shot-timer-training', version: 1, build: BUILD, created: new Date().toISOString(), sampleRate: audio.sr, ua: navigator.userAgent,
+    settings: { mode: S.mode, drill: S.dryDrill, sens: S.sens, drySens: S.drySens, clickMatch: S.clickMatch, beepHz: S.hz, beepMs: S.blen, camFacing: S.camFacing,
+      clickTpl: S.clickTpl, clickInfo: S.clickInfo, holTpl: S.holTpl, holInfo: S.holInfo, shooter: S.shooter, gun: S.gun },
+    recStartCtx: null, events: [] };
+  film.rec.onstart = () => { film.log.recStartCtx = +audio.ctx.currentTime.toFixed(4); film.log.recStartWall = Date.now(); };
+  film.rec.start(1000); film.on = true; renderFilmChip(); camStatus($('status').textContent, '');
+}
+function stopFilm() {
+  if (!film.on) return; film.on = false; renderFilmChip();
+  const done = () => {
+    try { film.cam.getTracks().forEach((t) => t.stop()); } catch {}
+    document.body.classList.remove('filming'); $('cam').srcObject = null;
+    const type = (film.mime || 'video/mp4').split(';')[0], ext = type.includes('webm') ? 'webm' : 'mp4';
+    film.result = { video: new Blob(film.chunks, { type }), ext, type, log: film.log, name: `training-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}` };
+    film.chunks = []; film.log = null; showFilmReady();
+  };
+  if (film.rec && film.rec.state !== 'inactive') { film.rec.onstop = done; film.rec.stop(); } else done();
+}
+function toggleFilm() { if (film.on) stopFilm(); else startFilm(); }
+function renderFilmChip() { const c = $('chip-film'); if (c) { c.classList.toggle('rec', film.on); $('lbl-film').textContent = film.on ? '● REC' : 'Off'; } }
+function camStatus(txt, cls) { const o = $('cam-status'); if (o) { o.textContent = txt; o.className = 'cam-status' + (cls ? ' ' + cls : ''); } }
+function camEvent(txt, kind) {
+  const box = $('cam-events'); if (!box) return;
+  const d = document.createElement('div'); d.className = 'cam-ev ' + kind; d.textContent = txt; box.prepend(d);
+  while (box.children.length > 3) box.lastChild.remove();
+}
+function showFilmReady() {
+  const r = film.result; if (!r) return;
+  const mb = (r.video.size / 1048576).toFixed(1), reps = r.log.events.filter((e) => e.type === 'rep' || e.type === 'string').length;
+  $('film-info').textContent = `${mb} MB video · ${reps} reps/strings · ${r.log.events.filter((e) => e.type === 'sound').length} sounds logged`;
+  $('film-dlg').showModal();
+}
+async function shareFilm() {
+  const r = film.result; if (!r) return;
+  const files = [new File([r.video], `${r.name}.${r.ext}`, { type: r.type }), new File([JSON.stringify(r.log)], `${r.name}.json`, { type: 'application/json' })];
+  try { if (navigator.canShare && navigator.canShare({ files })) { await navigator.share({ files, title: r.name }); return; } } catch (e) { if (e.name === 'AbortError') return; }
+  for (const f of files) { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; a.click(); }
+}
+
 function onWorklet(m) {
+  if (film.on && (m.type === 'shot' || m.type === 'beep')) filmLog(m.type === 'beep' ? 'beep' : 'sound', m.type === 'beep' ? { frame: m.frame, acoustic: m.acoustic, expected: m.expected } : { frame: m.frame, db: +m.peakDb.toFixed(1), bands: m.bands });
   if (m.type === 'level') { micHealth(m.db); return drawMeter(m.db); }
   if (m.type === 'beepdiag') return onBeepDiag(m);
   if (m.type === 'beep' && T.learning) { T.learning.beepFrame = m.frame; return; }
@@ -563,7 +626,7 @@ async function shareDiag() {
 }
 
 // ---------- rendering ----------
-function setStatus(txt, cls) { const s = $('status'); s.textContent = txt; s.className = 'status' + (cls ? ' ' + cls : ''); document.querySelector('.readout').classList.toggle('go', cls === 'live'); }
+function setStatus(txt, cls) { const s = $('status'); s.textContent = txt; s.className = 'status' + (cls ? ' ' + cls : ''); document.querySelector('.readout').classList.toggle('go', cls === 'live'); camStatus(txt, cls); }
 function setMain(txt, cls) { const b = $('btn-main'); b.textContent = txt; b.className = 'btn primary big-btn' + (cls ? ' ' + cls : ''); }
 
 function liveShots() { return T.shots.filter((s) => !s.removed).map((s) => s.t); }
@@ -789,6 +852,9 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('#seg-mode button').forEach((b) => b.onclick = () => setMode(b.dataset.mode));
   document.querySelectorAll('#seg-rep button').forEach((b) => b.onclick = () => { if (T.state === 'standby' || T.state === 'live' || T.state === 'reholster') return; S.dryRepeat = b.dataset.rep === 'repeat'; saveSettings(); setMode('dry'); });
   $('btn-export').onclick = exportCsv;
+  $('chip-film').onclick = toggleFilm; $('btn-film-share').onclick = (e) => { e.preventDefault(); shareFilm(); };
+  $('btn-film-close').onclick = () => { film.result = null; $('film-dlg').close(); };
+  const cf = $('set-cam'); cf.value = S.camFacing; cf.onchange = () => { S.camFacing = cf.value; saveSettings(); };
   $('chip-shooter').onclick = () => pick('Shooter', S.shooters, S.shooter, (v) => { S.shooter = v; saveSettings(); renderChips(); });
   $('chip-gun').onclick = () => pick('Gun', S.guns, S.gun, (v) => { S.gun = v; saveSettings(); renderChips(); });
   document.querySelectorAll('.tab').forEach((b) => b.onclick = () => showView(b.dataset.view));

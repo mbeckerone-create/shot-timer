@@ -28,3 +28,9 @@ Settings › Diagnostics shows what the mic heard during the last start beep, an
 ## Roadmap
 Sessions & multi-shooter rotation · drills/presets · voice scoring ("1 alpha, 2 charlie") · gun stats ·
 target photo → hit zones.
+
+## Training film (v0.4)
+🎥 Film on the Timer screen records the camera + the detector's own mic track, with a live overlay of what the
+app hears. Tapping it again offers **Share clip + log**: a video and a `.json` log of every sound, fingerprint,
+decision and rep result. `python3 tools/render_overlay.py clip.mp4 clip.json out.mp4` burns those decisions
+onto the video (beeps located in the clip's own audio).

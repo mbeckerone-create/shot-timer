@@ -94,3 +94,21 @@ body.dry #seg-mode button.on { color: #7cc4ff; }
 .tag { font-size: 11px; font-weight: 800; letter-spacing: .06em; background: #1d3a52; color: #7cc4ff; border-radius: 6px; padding: 1px 6px; }
 
 .seg.seg3 { grid-template-columns: 1fr 1fr 1fr; }
+
+/* training film */
+.chip.film { flex: 0 0 auto; }
+.chip.film.rec { border-color: var(--bad); }
+.chip.film.rec #lbl-film { color: var(--bad); }
+.camwrap { display: none; position: relative; border-radius: 16px; overflow: hidden; background: #000; margin-bottom: 10px; aspect-ratio: 16 / 9; max-height: 32vh; }
+body.filming .camwrap { display: block; }
+.camwrap video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.camwrap video.mirror { transform: scaleX(-1); }
+.cam-over { position: absolute; inset: 0; padding: 8px 10px; display: flex; flex-direction: column; justify-content: space-between; pointer-events: none;
+  font-family: var(--mono); text-shadow: 0 1px 3px #000, 0 0 8px #000; }
+.cam-status { font-size: 14px; font-weight: 800; letter-spacing: .04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 48px; text-transform: uppercase; color: #fff; }
+.cam-status.live { color: var(--ok); } .cam-status.standby { color: var(--warn); } .cam-status.err { color: var(--bad); }
+.cam-events { display: flex; flex-direction: column; gap: 2px; }
+.cam-ev { font-size: 12px; font-weight: 700; color: #ddd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cam-ev.click { color: var(--ok); } .cam-ev.holster { color: #7cc4ff; } .cam-ev.rep { color: #fff; font-size: 13px; } .cam-ev.no { color: #999; }
+.cam-rec { position: absolute; top: 8px; right: 10px; color: var(--bad); font-weight: 800; font-size: 13px; }
+#film-dlg .btn { margin-top: 8px; }

@@ -21,11 +21,15 @@
     <header class="bar">
       <button id="chip-shooter" class="chip" aria-label="Shooter"><span class="chip-k">Shooter</span><span id="lbl-shooter">—</span></button>
       <button id="chip-gun" class="chip" aria-label="Gun"><span class="chip-k">Gun</span><span id="lbl-gun">—</span></button>
+      <button id="chip-film" class="chip film" aria-label="Film training clip"><span class="chip-k">🎥 Film</span><span id="lbl-film">Off</span></button>
     </header>
 
     <div class="seg" id="seg-mode"><button data-mode="range">Range</button><button data-mode="dry">Dry fire</button></div>
     <div class="seg small dry-only seg3" id="seg-drill"><button data-drill="trigger">Trigger</button><button data-drill="draw">Draw</button><button data-drill="reload">Reload</button></div>
     <div class="seg small dry-only" id="seg-rep"><button data-rep="single">Single rep</button><button data-rep="repeat">Repeat drill</button></div>
+
+    <div class="camwrap"><video id="cam" playsinline muted autoplay></video>
+      <div class="cam-over"><div id="cam-status" class="cam-status"></div><div id="cam-events" class="cam-events"></div><div class="cam-rec">● REC</div></div></div>
 
     <div class="readout">
       <div id="status" class="status">Ready</div>
@@ -76,6 +80,10 @@
       <label class="row"><span>Reload drill: time allowed for the reload (s)</span><input id="set-rlto" type="number" min="3" max="30" step="1"></label>
       <label class="row"><span>Rep timeout, no click (s)</span><input id="set-rtime" type="number" min="2" max="15" step="1"></label>
 
+      <h2>Training film</h2>
+      <label class="row"><span>Camera</span><select id="set-cam"><option value="user">Front (see the overlay)</option><option value="environment">Back (better video)</option></select></label>
+      <p class="hint">Tap 🎥 Film on the Timer screen, run your drills, tap it again to stop and share the clip + log.</p>
+
       <h2>Detection</h2>
       <label class="row col"><span>Sensitivity <b id="lbl-sens"></b></span><input id="set-sens" type="range" min="1" max="10" step="1"></label>
       <p class="hint">Higher = hears quieter shots (and more of your neighbors). Watch the meter: the line is the threshold.</p>
@@ -110,6 +118,9 @@
     <button data-view="settings" class="tab">Settings</button>
   </nav>
 
+  <dialog id="film-dlg"><form method="dialog"><h3>Training clip ready</h3><p class="hint" id="film-info"></p>
+    <p class="hint">Share → Save to Files → Dropbox. It saves two files: the video and a .json log of everything the app heard and decided.</p>
+    <button id="btn-film-share" class="btn primary">Share clip + log</button> <button id="btn-film-close" class="btn ghost">Discard</button></form></dialog>
   <dialog id="picker"><form method="dialog"><h3 id="picker-title"></h3><div id="picker-list"></div><button class="btn ghost" value="cancel">Cancel</button></form></dialog>
 </main>
 <script src="detector.js"></script>
