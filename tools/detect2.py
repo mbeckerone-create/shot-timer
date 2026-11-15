@@ -6,7 +6,7 @@ Timestamp = first sample in arm block where |hp| > 4x floor rms (sample accurate
 Lockout LOCK_MS after the confirmed peak (merges crack+blast+echo)."""
 import numpy as np, glob, os, json, sys
 sys.path.insert(0,'analysis'); from detect import load, biquad_hp
-P=dict(hp=2000, arm_db=15, shot_db=-26, hpfrac_db=-9, confirm_ms=70, lock_ms=100, floor_ms=300, echo_ms=180, echo_db=6, back_ms=60, back_db=20, tonal=0.6, tonal_gap_ms=60)
+P=dict(hp=2000, arm_db=15, shot_db=-26, hpfrac_db=-9, confirm_ms=70, lock_ms=100, floor_ms=300, echo_ms=180, echo_db=6, echo_long_ms=1200, echo_long_db=10, back_ms=60, back_db=20, tonal=0.6, tonal_gap_ms=60)
 def top3(y,c,sr,n=1024):
     seg=y[c-n//4:c-n//4+n]*np.hanning(n); P=np.abs(np.fft.rfft(seg))**2+1e-20
     f=np.fft.rfftfreq(n,1/sr); P=P[(f>=1500)&(f<=16000)]
@@ -30,7 +30,7 @@ def detect(x,sr,p=P):
                 g=int(p['tonal_gap_ms']*sr/1000)
                 if top3(y,pks,sr)>p['tonal'] and (top3(y,pks+g,sr)>p['tonal'] or top3(y,pks-g,sr)>p['tonal']):
                     lock=j+p['lock_ms']; i=lock; continue   # sustained pure tone = a beep, not a shot
-                if shots and t-shots[-1]['t']<p['echo_ms']/1000 and w[pk]<shots[-1]['pk']-p['echo_db']:
+                if shots and ((t-shots[-1]['t']<p['echo_ms']/1000 and w[pk]<shots[-1]['pk']-p['echo_db']) or (t-shots[-1]['t']<p['echo_long_ms']/1000 and w[pk]<shots[-1]['pk']-p['echo_long_db'])):
                     lock=j+p['lock_ms']; i=lock; continue   # echo of previous shot
                 shots.append(dict(t=round(t,4),pk=round(float(w[pk]),1),hpf=round(float(hpf),1),dly=pk))
                 lock=j+p['lock_ms']; i=lock; continue

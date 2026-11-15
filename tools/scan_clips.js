@@ -15,7 +15,7 @@ for (const f of fs.readdirSync(dir).filter((f) => f.endsWith('.wav')).sort()) {
   for (let i = 0; i < x.length; i += 128) d.process(x.subarray(i, i + 128));
   const W = 600, step = Math.ceil(x.length / W), env = [];
   for (let k = 0; k < W; k++) { let pk = 0; for (let i = k * step; i < Math.min(x.length, (k + 1) * step); i++) pk = Math.max(pk, Math.abs(x[i])); env.push(Math.round(Math.max(-60, 20 * Math.log10(pk + 1e-9)))); }
-  const shots = d.shots.map((s) => [+(s.frame / sr).toFixed(3), +s.peakDb.toFixed(1)]);
+  const shots = d.shots.map((s) => [+(s.frame / sr).toFixed(3), +s.peakDb.toFixed(1), +s.hpFracDb.toFixed(1), s.bands ? s.bands.map((v) => +v.toFixed(1)) : null]);
   res.push({ name: f.replace(/\.wav$/, ''), dur: +(x.length / sr).toFixed(2), env, shots });
   const top = Math.max(...shots.map((s) => s[1]), -99);
   console.log(f.padEnd(30), `${(x.length / sr).toFixed(1)}s`.padStart(7), `${shots.length} sounds`.padStart(11), `within 10 dB of loudest: ${shots.filter((s) => s[1] >= top - 10).length}`, `loudest ${top} dB`);

@@ -7,12 +7,13 @@
  * loudest block is found; it is a shot if it is louder than shotDb AND mostly high-frequency
  * (hpFracDb). The onset is backtracked from that peak to where the burst began, so a bullet crack
  * or tiny precursor still times the shot from its very first sound. After a shot the detector is
- * locked for lockMs, and anything within echoMs that is echoDb quieter than the shot is an echo.
+ * locked for lockMs, and anything within echoMs that is echoDb quieter than the shot is an echo (or within echoLongMs and
+ * echoLongDb quieter: outdoor echoes off berms arrive up to ~1.2 s later).
  */
 (function (root) {
   const DEFAULTS = {
     hpHz: 2000, armDb: 15, shotDb: -26, hpFracDb: -9, confirmMs: 70, lockMs: 100,
-    notchHz: null, floorMs: 300, echoMs: 180, echoDb: 6, backMs: 60, backDb: 20, tonal: 0.6, tonalGapMs: 60,
+    notchHz: null, floorMs: 300, echoMs: 180, echoDb: 6, echoLongMs: 1200, echoLongDb: 10, backMs: 60, backDb: 20, tonal: 0.6, tonalGapMs: 60,
   };
   const RING = 4096;            // blocks of history (~4 s)
   const SRING = 1 << 15;        // samples of HP history (~0.68 s @48k)
@@ -148,7 +149,10 @@
             const g = Math.round(p.tonalGapMs * this.sr / 1000);
             if (this._top3(pks) > p.tonal && (this._top3(pks + g) > p.tonal || this._top3(pks - g) > p.tonal)) continue;  // sustained tone = a beep
             const last = this.shots[this.shots.length - 1];
-            const isEcho = last && (on - last.frame) < p.echoMs * this.sr / 1000 && pv < last.peakDb - p.echoDb;
+            // Echo: close behind a shot and quieter. Outdoors (45 filmed clips) echoes off berms and hills arrive
+            // 0.2-1.2 s after the shot, 10-25 dB down; your own follow-up shots are within a few dB of each other.
+            const gap = last ? (on - last.frame) / this.sr * 1000 : 1e9;
+            const isEcho = last && ((gap < p.echoMs && pv < last.peakDb - p.echoDb) || (p.echoLongMs > 0 && gap < p.echoLongMs && pv < last.peakDb - p.echoLongDb));
             if (!isEcho && !this._blanked(on)) {
               const shot = { frame: on, peakDb: pv, hpFracDb: hpf, bands: this._bands(on) };
               this.shots.push(shot); if (this.onShot) this.onShot(shot);
