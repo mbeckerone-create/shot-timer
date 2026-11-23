@@ -79,3 +79,18 @@ html[data-skin="softdark"]:root { --bg: #0e0f11; --panel: #1a1b1f; --panel2: #23
 html[data-skin="current"]:root { --bg: #0d0f12; --panel: #171a1f; --panel2: #1f242b; --line: #2a3038; --text: #f2f4f7; --muted: #8b95a3; --accent: #ff7a1a; --accent-ink: #1a0d00; --ok: #3ddc84; --bad: #ff5a5a; }
 /* the design board's own ".bar" (its checklist progress bar) must not style the History / Settings headers */
 body > .view.legacy .bar { all: unset; display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 12px 0; }
+
+/* History in the app (v0.8.1) */
+#app .hd-who[hidden], #app .hs-live[hidden], #app .hs-best[hidden], #app .hd-acts [hidden] { display: none !important; }
+#app .hd-acts { grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); }
+#app .hd-splits .hd-x { display: block; margin-top: 4px; background: none; border: 0; padding: 2px 0; color: #e5352b; font: 600 10.5px -apple-system, system-ui, sans-serif; cursor: pointer; }
+#app .hd-str[hidden], #app .hd-str[hidden] + .hd-splits { display: none; }
+#app .hd-clip { display: grid; grid-template-columns: 18px 1fr auto auto; gap: 8px; align-items: center; border-top: 1px solid var(--p-line); padding: 8px 12px; }
+#app .hd-clip div { display: flex; flex-direction: column; min-width: 0; } #app .hd-clip b { font-size: 12px; } #app .hd-clip i { font-style: normal; font-size: 10px; color: var(--p-muted); }
+#app .hd-clip button { background: var(--p-panel2); color: var(--p-text); border: 0; border-radius: 999px; padding: 5px 10px; font-size: 11px; font-weight: 600; }
+#app .hd-clip button[data-delclip] { color: #e5352b; }
+#app .hs-ses, #app .hd-str { -webkit-tap-highlight-color: transparent; }
+#app .p-res .ic { width: 13px; height: 13px; vertical-align: -2px; }
+#app .hd-check .ic { width: 12px; height: 12px; stroke-width: 2.8; }
+#app #who-results small .ic { width: 11px; height: 11px; }
+#app .hs-month { margin: 6px 4px 0; }

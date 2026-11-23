@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.8.0';
+const BUILD = 'v0.8.1';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -320,7 +320,7 @@ function stop() {
   setMain('START'); $('btn-review').disabled = !n; $('btn-review').textContent = 'Score…';
   autoSaveIfNeeded();
   const par = presetPar(), s0 = summarize(liveShots());
-  if (par > 0 && n) { const d = s0.total - par; $('p-res').textContent = d <= 0 ? `✓ ${Math.abs(d).toFixed(2)} under par ${par.toFixed(2)}` : `✗ ${d.toFixed(2)} over par ${par.toFixed(2)}`; $('p-res').className = 'p-res' + (d > 0 ? ' over' : ''); }
+  if (par > 0 && n) { const d = s0.total - par; $('p-res').innerHTML = d <= 0 ? `${IC.ok} ${Math.abs(d).toFixed(2)} under par ${par.toFixed(2)}` : `${IC.no} ${d.toFixed(2)} over par ${par.toFixed(2)}`; $('p-res').className = 'p-res' + (d > 0 ? ' over' : ''); }
   if (T.preset) {                                        // a drill: record the rep, then reset or finish
     T.drillRes.push({ v: n ? s0.total : null, ok: n > 0 && s0.total <= par, rec: T.saved });
     window.UI && UI.renderPlan();
@@ -521,7 +521,7 @@ function finishLearn() {
   const r = buildTemplate(L.list), info = { used: r.used, of: r.of, consistency: +r.consistency.toFixed(2), db: +r.db.toFixed(1), at: new Date().toISOString() };
   if (hol) { S.holTpl = r.tpl; S.holInfo = info; } else { S.clickTpl = r.tpl; S.clickInfo = info; }
   saveSettings();
-  setStatus(hol ? 'Holster learned ✓' : 'Click learned ✓'); $('beepinfo').textContent = `Learned from ${r.used} of ${r.of} ${noun} (consistency ${r.consistency.toFixed(2)}).`;
+  setStatus(hol ? 'Holster learned' : 'Click learned'); $('beepinfo').textContent = `Learned from ${r.used} of ${r.of} ${noun} (consistency ${r.consistency.toFixed(2)}).`;
   renderClickInfo();
 }
 function renderClickInfo() {
@@ -587,8 +587,8 @@ function stopFilm() {
     const ses = sessions.find((x) => x.id === film.log.session), c = ses && (ses.clips || []).find((x) => x.name === film.name);
     if (c) { c.end = new Date().toISOString(); saveSessions(); }
     film.chunks = []; film.log = null;
-    clipDB.put(film.result).then(() => { $('film-kept').textContent = 'Kept on this phone ✓ — find it later in History › session.'; })
-      .catch(() => { $('film-kept').textContent = '⚠ Could not keep a copy on the phone: save it now.'; });
+    clipDB.put(film.result).then(() => { $('film-kept').textContent = 'Kept on this phone — find it later in History › session.'; })
+      .catch(() => { $('film-kept').textContent = 'Could not keep a copy on the phone: save it now.'; });
     showFilmReady();
   };
   if (film.rec && film.rec.state !== 'inactive') { film.rec.onstop = done; film.rec.stop(); } else done();
@@ -629,7 +629,7 @@ function onWorklet(m) {
     // The worklet located the beep in the mic stream: that is t=0 for every shot.
     T.beepFrame = m.frame; T.acoustic = m.acoustic;
     const off = ((m.frame - m.expected) / audio.sr * 1000).toFixed(0);
-    $('beepinfo').textContent = m.acoustic ? 'Start beep heard by mic ✓ — timing from the beep' : 'Beep not heard by mic — using estimated timing';
+    $('beepinfo').textContent = m.acoustic ? 'Start beep heard by mic — timing from the beep' : 'Beep not heard by mic — using estimated timing';
     const p = T.pending; T.pending = []; for (const q of p) { if (T.state !== 'live') break; addShot(q.frame, q.db, q.bands); }
     return;
   }
@@ -713,7 +713,7 @@ function renderDiag() {
   const yn = (v) => v === undefined ? '?' : String(v);
   const t = d.trk, r = d.reported;
   el.textContent = [
-    `Last string ${d.at}: beep ${d.heard ? 'HEARD by mic ✓' : 'NOT heard ✗'}`,
+    `Last string ${d.at}: beep ${d.heard ? 'HEARD by mic' : 'NOT heard'}`,
     `— Beep played —`,
     `Pitch ${d.hz} Hz · gain ${d.gain} · output ${d.out} · generated peak ${d.genPeak == null ? 'n/a' : d.genPeak.toFixed(2)}`,
     `Session at schedule: ${d.sessAtSchedule} · at beep: ${d.sessAtBeep}`,
@@ -768,7 +768,7 @@ function renderStats() {
     const set = (a, b, c, e) => { $('s-count').textContent = a; $('s-first').textContent = b; $('s-split').textContent = c; $('s-avg').textContent = e; };
     if (S.dryDrill === 'draw') { lab(['Shot', 'Reaction', 'Draw→shot', 'Best shot']); big(d.last); set(fmt(L.t), fmt(L.react), fmt(L.split), fmt(d.best)); }
     else if (S.dryDrill === 'reload') { lab(['First shot', 'Reload', 'Best reload', 'Avg reload']); big(L.reload ?? d.last); set(fmt(L.t), fmt(L.reload), fmt(d.bestReload), fmt(d.avgReload)); }
-    else { lab(['Draws', 'Last', 'Best', 'Avg']); big(d.last); set(d.n + (d.misses ? ` (+${d.misses}✗)` : ''), fmt(d.last), fmt(d.best), fmt(d.avg)); }
+    else { lab(['Draws', 'Last', 'Best', 'Avg']); big(d.last); set(d.n + (d.misses ? ` (+${d.misses} missed)` : ''), fmt(d.last), fmt(d.best), fmt(d.avg)); }
     return;
   }
   lab(['Shots', 'First', 'Split', 'Avg split']);
@@ -841,59 +841,99 @@ function updateSaved() {
 }
 function recShots(r) { return r.shots.filter((s) => !s.removed).map((s) => s.t); }
 
-function renderHistory() {
-  const el = $('history'); el.innerHTML = '';
-  if (!history.length) { el.innerHTML = '<div class="empty">No strings yet. Shoot one on the Timer tab.</div>'; $('hist-summary').innerHTML = ''; return; }
-  // summary across everything for the current shooter
-  const mine = history.filter((h) => h.shooter === S.shooter && h.mode !== 'dry').map((h) => summarize(recShots(h))).filter((s) => s.count);
-  const dry = history.filter((h) => h.shooter === S.shooter && h.mode === 'dry').map((h) => recShots(h)[0]).filter((t) => t != null);
-  const best = (a) => a.length ? Math.min(...a) : null;
-  $('hist-summary').innerHTML =
-    `<div><span class="k">${esc(S.shooter)} · best draw (live)</span><span class="v">${fmt(best(mine.map((s) => s.first)))}</span></div>` +
-    `<div><span class="k">Best split</span><span class="v">${fmt(best(mine.map((s) => s.best).filter((x) => x != null)))}</span></div>` +
-    `<div><span class="k">Best dry draw · ${dry.length} reps</span><span class="v">${fmt(best(dry))}</span></div>`;
-  const sesBox = document.createElement('div'); sesBox.className = 'ses-list';
-  for (const ses of sessions.slice(0, 20)) {
-    const c = document.createElement('div'); c.className = 'card ses';
-    c.innerHTML = `<div class="top"><span class="who">${ses.id === activeSession ? '● ' : ''}${esc(ses.name)}</span><span class="when">${new Date(ses.start).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span></div>
-      <div class="hint">${sessionLine(ses)}</div><div class="ses-btns"><button class="btn small open">Open ›</button><button class="btn ghost small exp">Export</button><button class="btn ghost small del">Delete</button></div>`;
-    c.classList.add('tap'); c.onclick = (e) => { if (!e.target.closest('button')) openSession(ses.id); };
-    c.querySelector('.open').onclick = () => openSession(ses.id);
-    c.querySelector('.exp').onclick = () => exportSession(ses.id);
-    c.querySelector('.del').onclick = () => { if (confirm(`Delete session "${ses.name}"? Its reps stay in History.`)) { sessions = sessions.filter((x) => x !== ses); if (activeSession === ses.id) activeSession = null; history.forEach((h) => { if (h.session === ses.id) delete h.session; }); saveHistory(); saveSessions(); renderSession(); renderHistory(); } };
-    sesBox.appendChild(c);
-  }
-  if (sessions.length) { const h = document.createElement('div'); h.className = 'day'; h.textContent = 'Sessions'; el.appendChild(h); el.appendChild(sesBox); }
-  let day = '';
+// ---------- History: one card per session (records from before sessions are grouped by day) ----------
+const IC = {
+  cam: '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="6.5" width="13" height="11" rx="2.5"/><path d="M15.5 10.5l6-3.5v10l-6-3.5z"/></svg>',
+  ok: '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+  no: '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg>',
+};
+const ini = (n) => { const w = String(n || '?').trim().split(/\s+/); return (w[0][0] + (w.length > 1 ? w[w.length - 1][0] : '')).toUpperCase(); };
+const minOf = (a) => { a = a.filter((x) => x != null && isFinite(x)); return a.length ? Math.min(...a) : null; };
+const dryVal = (r) => (r.drill === 'reload' ? r.reload : recShots(r)[0]);
+let histFilter = 'all', openSes = null, sesWho = null;
+function histGroups() {
+  const out = [], byId = {};
+  for (const ses of sessions) { const g = { id: ses.id, ses, recs: [], start: ses.start, end: ses.end }; byId[ses.id] = g; out.push(g); }
   for (const r of history) {
-    const d = new Date(r.at), ds = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
-    if (ds !== day) { day = ds; const h = document.createElement('div'); h.className = 'day'; h.textContent = ds; el.appendChild(h); }
-    const s = summarize(recShots(r));
-    const c = document.createElement('div'); c.className = 'card';
-    if (r.mode === 'dry') {
-      c.classList.add('dry');
-      c.innerHTML = `<div class="top"><span class="who"><span class="tag">${{ draw: 'DRAW', reload: 'RELOAD' }[r.drill] || 'DRY'}</span> ${esc(r.shooter)} · ${esc(r.gun)}</span><span class="when">${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' })}</span></div>
-        <div class="nums">${r.drill === 'reload' ? `<div><span class="k">Reload</span><span class="v">${fmt(r.reload)}</span></div><div><span class="k">First shot</span><span class="v">${fmt(s.first)}</span></div>`
-          : r.drill === 'draw' ? `<div><span class="k">Shot</span><span class="v">${fmt(s.first)}</span></div><div><span class="k">Reaction</span><span class="v">${fmt(r.react)}</span></div><div><span class="k">Draw→shot</span><span class="v">${r.react != null ? fmt(s.first - r.react) : '—'}</span></div>`
-          : `<div><span class="k">Draw</span><span class="v">${fmt(s.first)}</span></div><div><span class="k">Click match</span><span class="v">${r.match ?? '—'}</span></div>`}</div>
-        <div class="detail"><button class="del">Delete rep</button></div>`;
-      c.onclick = (e) => {
-        if (e.target.classList.contains('del')) { history = history.filter((h) => h !== r); saveHistory(); renderHistory(); return; }
-        c.classList.toggle('open');
-      };
-      el.appendChild(c); continue;
-    }
-    c.innerHTML = `<div class="top"><span class="who">${esc(r.shooter)} · ${esc(r.gun)}</span><span class="when">${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span></div>
-      <div class="nums"><div><span class="k">Shots</span><span class="v">${s.count}</span></div><div><span class="k">First</span><span class="v">${fmt(s.first)}</span></div>
-      <div><span class="k">Avg split</span><span class="v">${fmt(s.avg)}</span></div><div><span class="k">Total</span><span class="v">${fmt(s.total)}</span></div></div>
-      <div class="detail">${recShots(r).map((t, i, a) => `${String(i + 1).padStart(2)}  ${fmt(t)}  ${i ? '+' + fmt(t - a[i - 1]) : 'draw'}`).join('<br>')}
-      ${r.par ? `<br>par ${r.par}s` : ''}${r.acoustic === false ? '<br>beep timing estimated' : ''}<br><button class="del">Delete string</button></div>`;
-    c.onclick = (e) => {
-      if (e.target.classList.contains('del')) { if (confirm('Delete this string?')) { history = history.filter((h) => h !== r); saveHistory(); renderHistory(); } return; }
-      c.classList.toggle('open');
-    };
-    el.appendChild(c);
+    if (r.session && byId[r.session]) { byId[r.session].recs.push(r); continue; }
+    const k = `day:${r.at.slice(0, 10)}:${r.mode === 'dry' ? 'dry' : 'range'}`;
+    if (!byId[k]) { byId[k] = { id: k, ses: null, recs: [], start: r.at, end: r.at }; out.push(byId[k]); }
+    const g = byId[k]; g.recs.push(r); if (r.at < g.start) g.start = r.at; if (r.at > g.end) g.end = r.at;
   }
+  for (const g of out) {
+    const range = g.recs.filter((r) => r.mode !== 'dry');
+    g.kind = range.length ? 'range' : g.recs.length ? 'dry' : (g.ses && /^dry/i.test(g.ses.name) ? 'dry' : 'range');
+  }
+  return out.filter((g) => g.recs.length || (g.ses && (g.ses.id === activeSession || (g.ses.clips || []).length))).sort((x, y) => (y.start < x.start ? -1 : 1));
+}
+function groupStats(g) {
+  if (g.kind === 'range') {
+    const sums = g.recs.filter((r) => r.mode !== 'dry').map((r) => summarize(recShots(r))).filter((q) => q.count);
+    return { best: minOf(sums.map((q) => q.first)), bestL: 'Best first', n: sums.length, nL: 'Strings', shots: sums.reduce((a, q) => a + q.count, 0), split: minOf(sums.flatMap((q) => q.splits)) };
+  }
+  const recs = g.recs.filter((r) => r.mode === 'dry');
+  return { best: minOf(recs.map(dryVal)), bestL: 'Best draw', n: recs.length, nL: 'Reps', shots: recs.reduce((a, r) => a + recShots(r).length, 0) };
+}
+const dayStr = (iso, o) => new Date(iso).toLocaleDateString(undefined, o || { weekday: 'short', month: 'short', day: 'numeric' });
+const numS = (v) => (v == null ? '—' : `${v.toFixed(2)}<small>s</small>`);
+function renderHistory() {
+  if (!$('hs-body')) return;
+  const mine = history.filter((h) => h.shooter === S.shooter);
+  const rs = mine.filter((h) => h.mode !== 'dry').map((h) => ({ h, q: summarize(recShots(h)) })).filter((x) => x.q.count);
+  const bestOf = (arr, f) => { let b = null; for (const x of arr) { const v = f(x); if (v != null && isFinite(v) && (!b || v < b.v)) b = { v, at: x.h.at }; } return b; };
+  const bf = bestOf(rs, (x) => x.q.first), bs = bestOf(rs, (x) => minOf(x.q.splits)), bd = bestOf(mine.filter((h) => h.mode === 'dry' && h.drill !== 'reload').map((h) => ({ h })), (x) => recShots(x.h)[0]);
+  const cell = (k, b, w) => `<div><i>${k}</i><b>${b ? numS(b.v) : '—'}</b><em>${b ? `${w} · ${dayStr(b.at, { month: 'short', day: 'numeric' })}` : '&nbsp;'}</em></div>`;
+  $('hs-best').innerHTML = cell('Best first shot', bf, 'Range') + cell('Best split', bs, 'Range') + cell('Best dry draw', bd, 'Dry');
+  $('hs-best').hidden = !history.length;
+  document.querySelectorAll('.hs-pills button').forEach((b) => b.classList.toggle('on', b.dataset.f === histFilter));
+  const all = histGroups(), live = all.find((g) => g.id === activeSession);
+  $('hs-live').hidden = !live;
+  if (live) { $('hs-live-t').textContent = `${live.kind === 'dry' ? 'Dry fire' : 'Range'} · today`; const st = groupStats(live); $('hs-live-s').textContent = `In progress · ${st.n} ${st.nL.toLowerCase()}`; }
+  const list = all.filter((g) => g !== live && (histFilter === 'all' || g.kind === histFilter));
+  const body = $('hs-body'); body.innerHTML = '';
+  if (!list.length) { body.innerHTML = `<p class="p-hint" style="text-align:center;margin:24px 0">${history.length ? 'Nothing here for this filter.' : 'No sessions yet. Start one from Train.'}</p>`; return; }
+  let month = '', box = null;
+  for (const g of list) {
+    const m = new Date(g.start).toLocaleDateString(undefined, { month: 'long', year: new Date(g.start).getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
+    if (m !== month) { month = m; body.insertAdjacentHTML('beforeend', `<div class="hs-month">${esc(m)}</div>`); box = document.createElement('div'); box.className = 'hs-list'; body.appendChild(box); }
+    const st = groupStats(g), who = [...new Set(g.recs.map((r) => r.shooter))], clips = g.ses ? (g.ses.clips || []).length : 0;
+    const whoH = g.kind === 'range' && (who.length || clips) ? `<span class="hs-who">${who.map((w) => `<span title="${esc(w)}">${esc(ini(w))}</span>`).join('')}${clips ? `<span class="hs-film">${IC.cam}${clips}</span>` : ''}</span>` : '';
+    const c = document.createElement('div'); c.className = 'hs-card';
+    c.innerHTML = `<button class="hs-del" aria-label="Delete session">Delete</button>
+      <button class="hs-ses"><div class="hs-top"><span class="hs-ic ${g.kind}"></span><b>${g.kind === 'dry' ? 'Dry fire' : 'Range'}</b><i>${dayStr(g.start)}</i>${whoH}<span class="hs-chev">›</span></div>
+      <div class="hs-stats"><div><i>${st.bestL}</i><b>${numS(st.best)}</b></div><div><i>${st.nL}</i><b>${st.n}</b></div><div><i>Shots</i><b>${st.shots}</b></div></div></button>`;
+    swipeRow(c, () => openSession(g.id), () => deleteGroup(g));
+    box.appendChild(c);
+  }
+}
+// swipe a card left to show Delete; a long swipe asks straight away; a tap opens it
+function swipeRow(c, onTap, onDel) {
+  const row = c.querySelector('.hs-ses'); let x0 = null, y0 = 0, dx = 0, open = false, moved = false, lock = null;
+  const set = (v) => { row.style.transform = v ? `translateX(${v}px)` : ''; };
+  row.addEventListener('pointerdown', (e) => { x0 = e.clientX; y0 = e.clientY; dx = 0; moved = false; lock = null; c.classList.add('drag'); });
+  row.addEventListener('pointermove', (e) => {
+    if (x0 == null) return; const ax = Math.abs(e.clientX - x0), ay = Math.abs(e.clientY - y0);
+    if (!lock && (ax > 8 || ay > 8)) { lock = ax > ay ? 'x' : 'y'; if (lock === 'x') try { row.setPointerCapture(e.pointerId); } catch (er) {} }
+    if (lock !== 'x') return; moved = true; dx = e.clientX - x0 + (open ? -84 : 0); set(Math.max(-140, Math.min(0, dx)));
+  });
+  const up = () => {
+    if (x0 == null) return; x0 = null; c.classList.remove('drag');
+    if (lock === 'y') return;
+    if (!moved) { if (open) { open = false; set(0); } else onTap(); return; }
+    if (dx < -120) { set(0); open = false; onDel(); return; }
+    open = dx < -42; set(open ? -84 : 0);
+  };
+  row.addEventListener('pointerup', up); row.addEventListener('pointercancel', () => { x0 = null; c.classList.remove('drag'); set(open ? -84 : 0); });
+  c.querySelector('.hs-del').onclick = (e) => { e.stopPropagation(); onDel(); };
+}
+function deleteGroup(g) {
+  const st = groupStats(g);
+  if (!confirm(`Delete this ${g.kind === 'dry' ? 'dry fire' : 'range'} session from ${dayStr(g.start)} and its ${st.n} ${st.nL.toLowerCase()}? This cannot be undone.`)) { renderHistory(); return; }
+  const ids = new Set(g.recs);
+  history = history.filter((h) => !ids.has(h));
+  if (g.ses) { sessions = sessions.filter((x) => x !== g.ses); if (activeSession === g.ses.id) activeSession = null; }
+  saveHistory(); saveSessions(); renderSession(); renderHistory();
+  if (screen === 'session') showScreen('history');
 }
 function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
@@ -937,57 +977,86 @@ function exportSession(id) {
   const json = { kind: 'shot-timer-session', version: 1, build: BUILD, session: ses, records: recs };
   shareFiles([new File([csvOf(recs)], base + '.csv', { type: 'text/csv' }), new File([JSON.stringify(json, null, 1)], base + '.json', { type: 'application/json' })]);
 }
-// Session detail: everything shot in the session, newest first, plus its clips.
+// Session detail: strings grouped by drill, shooter filter, tap a string for its splits.
 async function openSession(id) {
-  const ses = sessions.find((x) => x.id === id); if (!ses) return;
-  const recs = sessionRecs(id), d = new Date(ses.start), box = $('ses-detail');
-  $('ses-title-h').textContent = ses.name;
-  const mins = Math.round(((ses.end ? new Date(ses.end) : new Date()) - d) / 60000);
-  const range = recs.filter((r) => r.mode !== 'dry'), dry = recs.filter((r) => r.mode === 'dry');
-  const sums = range.map((r) => summarize(recShots(r))).filter((q) => q.count), best = (a) => (a.length ? Math.min(...a) : null);
-  const firsts = sums.map((q) => q.first), splits = sums.flatMap((q) => q.splits);
-  let h = `<div class="hint">${d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} · ${mins} min${ses.id === activeSession ? ' · <b class="live">in progress</b>' : ''}</div>
-    <div class="summary"><div><span class="k">Range strings</span><span class="v">${range.length}</span></div><div><span class="k">Shots</span><span class="v">${sums.reduce((a, q) => a + q.count, 0)}</span></div>
-    <div><span class="k">Best first shot</span><span class="v">${fmt(best(firsts))}</span></div><div><span class="k">Best split</span><span class="v">${fmt(best(splits))}</span></div>
-    ${dry.length ? `<div><span class="k">Dry reps</span><span class="v">${dry.length}</span></div><div><span class="k">Best dry</span><span class="v">${fmt(best(dry.map((r) => recShots(r)[0]).filter((t) => t != null)))}</span></div>` : ''}</div>`;
-  const clips = ses.clips || [], kept = await clipDB.list().catch(() => []);
-  if (clips.length) {
-    h += `<h2>Clips</h2>`;
-    for (const c of clips) { const k = kept.find((x) => x.name === c.name);
-      h += `<div class="card clip"><div class="top"><span class="who">🎥 ${esc(c.name)}</span><span class="when">${new Date(c.start).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span></div>
-        <div class="hint">${recs.filter((r) => r.clip === c.name).length} strings/reps in this clip${k ? ` · ${(k.video.size / 1048576).toFixed(0)} MB on this phone${k.saved ? ' · shared ✓' : ' · <b class="warn">not saved anywhere yet</b>'}` : ' · not on this phone'}</div>
-        ${k ? `<div class="ses-btns"><button class="btn small" data-roll="${esc(c.name)}">Save to camera roll</button><button class="btn ghost small" data-share="${esc(c.name)}">Clip + log</button><button class="btn ghost small" data-delclip="${esc(c.name)}">Delete</button></div>` : ''}</div>`; }
+  const g = histGroups().find((x) => x.id === id) || (sessions.some((x) => x.id === id) ? { id, ses: sessions.find((x) => x.id === id), recs: [], start: sessions.find((x) => x.id === id).start, kind: 'range' } : null);
+  if (!g) return;
+  if (openSes !== id) sesWho = null; openSes = id;
+  const st = groupStats(g), recs = g.recs.slice().reverse(), d0 = new Date(g.start), d1 = g.ses ? (g.ses.end ? new Date(g.ses.end) : g.ses.id === activeSession ? new Date() : new Date(g.end || g.start)) : new Date(g.end);
+  const tm = (d) => d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }), mins = Math.max(0, Math.round((d1 - d0) / 60000));
+  $('ses-title-h').textContent = `${g.kind === 'dry' ? 'Dry fire' : 'Range'} · ${dayStr(g.start, { month: 'short', day: 'numeric' })}`;
+  $('hd-sub').textContent = `${dayStr(g.start, { weekday: 'short' })} · ${tm(d0)}${mins ? ` – ${tm(d1)} · ${mins >= 60 ? `${Math.floor(mins / 60)} h ${mins % 60} m` : `${mins} min`}` : ''}${g.ses && g.ses.id === activeSession ? ' · in progress' : ''}`;
+  const sv = (v) => (v == null ? '—' : v.toFixed(2)), f2 = (v) => (v == null ? '—' : v.toFixed(2));
+  $('hd-stats').innerHTML = g.kind === 'range'
+    ? `<div><i>Strings</i><b>${st.n}</b></div><div><i>Shots</i><b>${st.shots}</b></div><div><i>Best first</i><b>${sv(st.best)}</b></div><div><i>Best split</i><b>${sv(st.split)}</b></div>`
+    : `<div><i>Reps</i><b>${st.n}</b></div><div><i>Shots</i><b>${st.shots}</b></div><div><i>Best draw</i><b>${sv(minOf(recs.filter((r) => r.drill !== 'reload').map(dryVal)))}</b></div><div><i>Best reload</i><b>${sv(minOf(recs.filter((r) => r.drill === 'reload').map((r) => r.reload)))}</b></div>`;
+  const main = (r) => (r.mode === 'dry' ? dryVal(r) : summarize(recShots(r)).total);
+  const first = (r) => (r.mode === 'dry' ? dryVal(r) : summarize(recShots(r)).first);
+  const who = [...new Set(recs.map((r) => r.shooter))];
+  const W = $('hd-who'); W.hidden = who.length < 2; W.innerHTML = '';
+  if (who.length > 1) {
+    const mk = (name) => { const b = document.createElement('button'); b.className = sesWho === name ? 'on' : '';
+      b.innerHTML = name == null ? 'All' : `<span>${esc(ini(name))}</span>${sv(minOf(recs.filter((r) => r.shooter === name).map(first)))}`; if (name == null) b.className = sesWho == null ? 'on' : '';
+      b.onclick = () => { sesWho = name; openSession(id); }; W.appendChild(b); };
+    mk(null); who.forEach(mk);
   }
-  h += `<h2>Strings &amp; reps</h2>`;
-  if (!recs.length) h += '<div class="empty">Nothing saved in this session yet.</div>';
-  recs.forEach((r, i) => {
-    const ts = recShots(r), when = new Date(r.at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' }), no = recs.length - i;
-    const clip = r.clip ? `<span class="hint"> · ${esc(r.clip.replace(/^.*-/, ''))} @ ${Math.floor(r.clipT / 60)}:${String(Math.floor(r.clipT % 60)).padStart(2, '0')}</span>` : '';
-    if (r.mode === 'dry') {
-      h += `<div class="srow"><div class="top"><b>#${no} ${{ draw: 'Draw', reload: 'Reload' }[r.drill] || 'Trigger'}</b><span class="when">${when}</span></div>
-        <div class="mono">${r.drill === 'reload' ? `shot ${fmt(ts[0])} · reload ${fmt(r.reload)}` : r.drill === 'draw' ? `shot ${fmt(ts[0])} · react ${fmt(r.react)}` : `click ${fmt(ts[0])}`}${clip}</div></div>`;
-      return;
-    }
-    const all = r.shots; let n = 0, prev = null;
-    const rows = all.map((q) => { if (q.removed) return `<span class="off">${fmt(q.t)} ${q.gated ? 'quieter' : 'removed'}</span>`; n++; const sp = prev == null ? 'draw' : '+' + fmt(q.t - prev); prev = q.t; return `${String(n).padStart(2)}  ${fmt(q.t)}  ${sp}`; });
-    h += `<div class="srow"><div class="top"><b>#${no} Range · ${ts.length} shot${ts.length === 1 ? '' : 's'}</b><span class="when">${when}</span></div>
-      <div class="mono">${rows.join('<br>')}${clip ? '<br>' + clip : ''}</div></div>`;
-  });
-  h += `<div class="ses-btns"><button class="btn primary" id="ses-exp">Export session</button></div>`;
-  box.innerHTML = h;
-  $('ses-exp').onclick = () => exportSession(id);
-  const byName = async (n) => (await clipDB.get(n));
-  box.querySelectorAll('[data-roll]').forEach((b) => b.onclick = async () => shareClip(await byName(b.dataset.roll), false).then(() => openSession(id)));
-  box.querySelectorAll('[data-share]').forEach((b) => b.onclick = async () => shareClip(await byName(b.dataset.share), true).then(() => openSession(id)));
-  box.querySelectorAll('[data-delclip]').forEach((b) => b.onclick = async () => { if (confirm(`Delete ${b.dataset.delclip} from this phone? Only do this once it's saved somewhere.`)) { await clipDB.del(b.dataset.delclip); openSession(id); } });
-  showScreen('session');
+  const shown = recs.filter((r) => sesWho == null || r.shooter === sesWho);
+  const groups = []; const gi = {};
+  for (const r of shown) { const k = r.mode === 'dry' ? ({ draw: 'Draw', reload: 'Reload' }[r.drill] || 'Trigger') : (r.drillName || 'Free shooting'); if (!gi[k]) { gi[k] = { name: k, recs: [] }; groups.push(gi[k]); } gi[k].recs.push(r); }
+  const box = $('hd-body'); box.innerHTML = shown.length ? '' : '<p class="p-hint" style="text-align:center;margin:20px 0">Nothing saved in this session yet.</p>';
+  for (const grp of groups) {
+    const par = grp.recs.find((r) => r.par)?.par, n = grp.recs.length;
+    const under = par ? grp.recs.filter((r) => main(r) != null && main(r) <= par).length : 0;
+    const nShots = grp.recs[0].mode === 'dry' ? null : recShots(grp.recs[0]).length;
+    const sub = grp.recs[0].mode === 'dry' ? `${n} rep${n === 1 ? '' : 's'}` : par ? `${nShots} shots · par ${par.toFixed(2)}` : 'no par';
+    const right = par ? `${under} / ${n} under par` : `${n} ${grp.recs[0].mode === 'dry' ? (n === 1 ? 'rep' : 'reps') : (n === 1 ? 'string' : 'strings')}`;
+    const el = document.createElement('div'); el.className = 'hd-drill';
+    el.innerHTML = `<div class="hd-dh"><b>${esc(grp.name)}</b><i>${sub}</i><span class="hd-par">${right}</span></div>`;
+    grp.recs.forEach((r, i) => {
+      const v = main(r), ok = par && v != null ? v <= par : null, q = r.mode === 'dry' ? null : summarize(recShots(r));
+      const side = r.mode === 'dry' ? (r.drill === 'draw' && r.react != null ? `react ${f2(r.react)}` : '') : r.score && r.score.hf != null ? `HF ${r.score.hf.toFixed(1)}` : par ? '—' : `${q.count} shot${q.count === 1 ? '' : 's'}`;
+      const row = document.createElement('button'); row.className = 'hd-str';
+      row.innerHTML = `<span class="hd-n">${i + 1}</span><span class="hd-i" title="${esc(r.shooter)}">${esc(ini(r.shooter))}</span><b>${v == null ? '—' : f2(v)}</b><span class="${ok == null ? '' : ok ? 'hd-ok' : 'hd-no'}">${ok == null ? '' : ok ? IC.ok : IC.no}</span><span class="hd-hf">${side}</span><span class="hd-cl">${r.clip ? IC.cam : ''}</span>`;
+      const sp = document.createElement('div'); sp.className = 'hd-splits';
+      let det;
+      if (r.mode === 'dry') det = r.drill === 'reload' ? `First ${f2(recShots(r)[0])} · reload ${f2(r.reload)}` : r.drill === 'draw' ? `Shot ${f2(recShots(r)[0])}${r.react != null ? ` · reaction ${f2(r.react)} · draw ${f2(r.split)}` : ''}` : `Click ${f2(recShots(r)[0])}`;
+      else { const t = recShots(r); det = t.map((x, j) => (j ? f2(x - t[j - 1]) : `${r.drillName ? 'Draw' : 'First'} ${f2(x)}`)).join(' · '); }
+      const sc = r.score ? `${r.score.points} pts · ${Object.entries(r.score.hits || {}).map(([tg, z]) => `T${tg} ` + Object.entries(z).filter(([, c]) => c).map(([k, c]) => `${c} ${k}`).join(' ')).join(' · ')}` : (r.mode !== 'dry' && r.drillName ? 'Not scored' : '');
+      const clip = r.clip ? `Clip ${esc(r.clip.replace(/^.*-/, ''))} @ ${Math.floor(r.clipT / 60)}:${String(Math.floor(r.clipT % 60)).padStart(2, '0')}` : '';
+      sp.innerHTML = `${det}<br><span>${[new Date(r.at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }), esc(r.gun || ''), sc, clip].filter(Boolean).join(' · ')}</span><button class="hd-x">Delete string</button>`;
+      sp.querySelector('.hd-x').onclick = () => { if (confirm('Delete this string?')) { history = history.filter((h) => h !== r); saveHistory(); renderHistory(); openSession(id); } };
+      row.onclick = () => row.classList.toggle('open');
+      if (i >= 5) { row.hidden = true; sp.dataset.more = '1'; }
+      el.append(row, sp);
+    });
+    if (n > 5) { const m = document.createElement('button'); m.className = 'hd-more'; m.textContent = `+ ${n - 5} more ${grp.recs[0].mode === 'dry' ? 'reps' : par ? 'reps' : 'strings'}`;
+      m.onclick = () => { el.querySelectorAll('.hd-str[hidden]').forEach((x) => (x.hidden = false)); m.remove(); }; el.appendChild(m); }
+    box.appendChild(el);
+  }
+  const clips = g.ses ? g.ses.clips || [] : [], kept = (await clipDB.list().catch(() => [])).filter((k) => clips.some((c) => c.name === k.name));
+  if (kept.length) {
+    const el = document.createElement('div'); el.className = 'hd-drill';
+    el.innerHTML = `<div class="hd-dh"><b>Clips</b><i>kept on this phone</i><span class="hd-par">${kept.length}</span></div>` + kept.map((k) => `<div class="hd-clip"><span class="hd-cl">${IC.cam}</span><div><b>${esc(k.name.replace(/^.*-/, ''))}</b><i>${(k.video.size / 1048576).toFixed(0)} MB · ${k.saved ? 'saved' : 'not saved anywhere yet'}</i></div><button data-roll="${esc(k.name)}">Save</button><button data-delclip="${esc(k.name)}">Delete</button></div>`).join('');
+    el.querySelectorAll('[data-roll]').forEach((b) => b.onclick = async () => shareClip(await clipDB.get(b.dataset.roll), false).then(() => openSession(id)));
+    el.querySelectorAll('[data-delclip]').forEach((b) => b.onclick = async () => { if (confirm(`Delete ${b.dataset.delclip} from this phone? Only do this once it's saved somewhere.`)) { await clipDB.del(b.dataset.delclip); openSession(id); } });
+    box.appendChild(el);
+  }
+  $('ses-exp').onclick = () => (g.ses ? exportSession(g.ses.id) : shareFiles([new File([csvOf(g.recs)], `shot-timer-${g.start.slice(0, 10)}-${g.kind}.csv`, { type: 'text/csv' })]));
+  $('ses-clips').hidden = !kept.length;
+  $('ses-clips').onclick = async () => {
+    const files = kept.map((k) => new File([k.video], `${k.name}.${k.ext}`, { type: k.type }));
+    try { if (navigator.canShare && navigator.canShare({ files })) { await navigator.share({ files }); for (const k of kept) { k.saved = true; clipDB.put(k).catch(() => {}); } openSession(id); return; } } catch (e) { if (e.name === 'AbortError') return; }
+    for (const k of kept) await shareClip(k, false);
+  };
+  $('ses-del').onclick = () => deleteGroup(g);
+  if (screen !== 'session') showScreen('session');
 }
 // Clips not shared anywhere yet: a reminder on the home screen.
 async function clipReminder() {
   const el = $('clip-note'); if (!el) return;
   const list = (await clipDB.list().catch(() => [])).filter((c) => !c.saved);
   el.hidden = !list.length;
-  if (list.length) { el.textContent = `🎥 ${list.length} clip${list.length > 1 ? 's' : ''} kept on this phone, not saved anywhere yet — tap to see`; el.onclick = () => (list[0].session && sessions.some((x) => x.id === list[0].session) ? openSession(list[0].session) : showScreen('history')); }
+  if (list.length) { el.textContent = `${list.length} clip${list.length > 1 ? 's' : ''} kept on this phone, not saved anywhere yet — tap to see`; el.onclick = () => (list[0].session && sessions.some((x) => x.id === list[0].session) ? openSession(list[0].session) : showScreen('history')); }
 }
 function renderSession() {
   const el = $('ses-text'); if (!el) return;
@@ -1127,6 +1196,8 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-film-share').onclick = (e) => { e.preventDefault(); shareFilm(true); };
   $('btn-film-close').onclick = () => { film.result = null; $('film-dlg').close(); };
   $('ses-back').onclick = () => showScreen('history');
+  document.querySelectorAll('.hs-pills button').forEach((b) => b.onclick = () => { histFilter = b.dataset.f; renderHistory(); });
+  $('hs-live').onclick = () => { const g = histGroups().find((x) => x.id === activeSession); showScreen(g && g.kind === 'dry' ? 'drymenu' : 'range'); };
   const cf = $('set-cam'); cf.value = S.camFacing; cf.onchange = () => { S.camFacing = cf.value; saveSettings(); };
   $('chip-shooter').onclick = () => pick('Shooter', S.shooters, S.shooter, (v) => { S.shooter = v; saveSettings(); renderChips(); });
   $('chip-gun').onclick = () => pick('Gun', S.guns, S.gun, (v) => { S.gun = v; saveSettings(); renderChips(); });

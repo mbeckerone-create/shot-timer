@@ -77,7 +77,7 @@
     res.innerHTML = '';
     const row = (r) => {
       const on = inSes.includes(r.name), b = el('button', on ? 'in' : '');
-      b.append(el('i', null, initials(r.name)), el('span', null, r.name), el('small', null, on ? 'In session ✓' : r.uses ? r.uses + (r.uses === 1 ? ' session' : ' sessions') : 'New'));
+      b.append(el('i', null, initials(r.name)), el('span', null, r.name), (() => { const sm = el('small', null, on ? 'In session ' : r.uses ? r.uses + (r.uses === 1 ? ' session' : ' sessions') : 'New'); if (on) sm.insertAdjacentHTML('beforeend', '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>'); return sm; })());
       b.addEventListener('mousedown', (e) => e.preventDefault());
       b.onclick = () => { if (on) { if (!r.me) inSes = inSes.filter((x) => x !== r.name); } else inSes.push(r.name); saveWho(); renderWho(); renderResults(); };
       return b;
@@ -140,7 +140,7 @@
     const r = el('div', 'hd-row' + (pr === selDrill ? ' sel' : '')); r.setAttribute('role', 'button'); r.setAttribute('aria-pressed', pr === selDrill);
     const txt = el('div', 'hd-txt'); txt.appendChild(el('b', null, pr.name));
     const ed = el('button', 'hd-edit', 'Edit'); ed.onclick = (e) => { e.stopPropagation(); openEditor(pr); };
-    r.append(el('span', 'hd-check', '✓'), txt, ed); r.onclick = () => { selDrill = selDrill === pr ? null : pr; renderHubDrills(); };
+    const chk = el('span', 'hd-check'); chk.innerHTML = '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>'; r.append(chk, txt, ed); r.onclick = () => { selDrill = selDrill === pr ? null : pr; renderHubDrills(); };
     return r;
   }
   function renderHubDrills() {
@@ -243,15 +243,15 @@
       del.onclick = () => { ed.steps.splice(i, 1); renderEditor(); }; r.appendChild(del); S2.appendChild(r);
     });
   }
-  // speech -> text: the Web Speech API where the browser has it, else the keyboard's own 🎤 dictation
+  // speech -> text: the Web Speech API where the browser has it, else the keyboard's own dictation
   function micInto(btn, box, onText) {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     btn.onclick = () => {
-      if (!SR) { box.focus(); toast('Tap the 🎤 on your keyboard and speak'); return; }
-      let r; try { r = new SR(); } catch { box.focus(); toast('Tap the 🎤 on your keyboard and speak'); return; }
+      if (!SR) { box.focus(); toast('Tap the mic key on your keyboard and speak'); return; }
+      let r; try { r = new SR(); } catch { box.focus(); toast('Tap the mic key on your keyboard and speak'); return; }
       r.lang = 'en-US'; r.interimResults = true; r.continuous = false; btn.classList.add('on');
       r.onresult = (e) => { box.value = [...e.results].map((x) => x[0].transcript).join(' '); if (e.results[e.results.length - 1].isFinal) onText(); };
-      r.onerror = () => { btn.classList.remove('on'); box.focus(); toast('Tap the 🎤 on your keyboard and speak'); };
+      r.onerror = () => { btn.classList.remove('on'); box.focus(); toast('Tap the mic key on your keyboard and speak'); };
       r.onend = () => btn.classList.remove('on');
       try { r.start(); } catch { btn.classList.remove('on'); box.focus(); }
     };
@@ -384,7 +384,7 @@
   $('h-pr').onclick = () => showScreen('history');
 
   // ---------- settings: style ----------
-  const sk = $('set-skin'); sk.value = S.skin || 'soft'; sk.onchange = () => applySkin(sk.value);
+  const sk = $('set-skin'); sk.value = S.skin || 'softdark'; sk.onchange = () => applySkin(sk.value);
 
   // ---------- hooks for app.js ----------
   function onScreen(v) {
@@ -393,5 +393,6 @@
     if (v === 'timer') renderPlan();
   }
   window.UI = { renderPlan, gauge, parMark, openScore, nextShooter, renderHub, onScreen, renderHome };
-  applySkin(S.skin || 'soft'); renderWho(); onScreen(screen);
+  if (!S.skinSet081) { S.skin = 'softdark'; S.skinSet081 = 1; }   // v0.8.1: Soft dark becomes the look, once; Settings › Look still changes it
+  applySkin(S.skin || 'softdark'); renderWho(); onScreen(screen);
 })();

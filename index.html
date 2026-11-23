@@ -74,7 +74,7 @@
     <div class="ed-scroll">
       <div class="ed-hero" id="ed-hero">
         <div class="eh-title">Describe it</div>
-        <div class="eh-field"><input id="vb-text" type="text" enterkeyhint="done" autocomplete="off" placeholder="2 shots on target 1, 5 reps under 4 s" aria-label="Describe the drill"><button class="vb-mic" id="vb-mic" aria-label="Speak the drill">🎙</button></div>
+        <div class="eh-field"><input id="vb-text" type="text" enterkeyhint="done" autocomplete="off" placeholder="2 shots on target 1, 5 reps under 4 s" aria-label="Describe the drill"><button class="vb-mic" id="vb-mic" aria-label="Speak the drill"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M9 21h6"/></svg></button></div>
         <div class="vb-heard eh-heard" id="vb-heard">Say it or type it. Press done when you finish.</div>
         <button class="eh-edit" id="eh-edit">Edit drill<span aria-hidden="true">⌄</span></button>
       </div>
@@ -104,7 +104,7 @@
       <div class="p-seg" id="seg-rep"><button data-rep="single">Single</button><button data-rep="repeat">Repeat</button></div></div>
     <div class="p-chips"><button class="p-chip" id="chip-shooter" aria-label="Shooter"><i>Shooter</i><b id="lbl-shooter">—</b></button>
       <button class="p-chip" id="chip-gun" aria-label="Gun"><i>Gun</i><b id="lbl-gun">—</b></button>
-      <button class="p-chip film" id="chip-film" aria-label="Film training clip"><i>🎥 Film</i><b id="lbl-film">Off</b></button></div>
+      <button class="p-chip film" id="chip-film" aria-label="Film training clip"><i><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="6.5" width="13" height="11" rx="2.5"/><path d="M15.5 10.5l6-3.5v10l-6-3.5z"/></svg>Film</i><b id="lbl-film">Off</b></button></div>
     <div class="p-plan" id="p-plan" hidden><div class="pl-top"><b id="pl-round">Rep 1 of 5</b><span id="pl-do"></span></div><div class="pl-steps" id="pl-steps"></div><div class="pl-dots" id="pl-dots"></div></div>
     <div class="p-read readout" id="p-read">
       <div class="p-status" id="status">Ready</div>
@@ -128,12 +128,29 @@
   <div class="p-dlg" id="p-score" hidden><div>
     <div class="vb-top"><h4 id="sc-title">Score string</h4><button class="p-back" id="sc-close">Done</button></div>
     <div class="vbox">
-      <div class="vb-top"><b>Say the hits</b><button class="vb-mic" id="sc-mic" aria-label="Speak the hits">🎙</button></div>
+      <div class="vb-top"><b>Say the hits</b><button class="vb-mic" id="sc-mic" aria-label="Speak the hits"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M9 21h6"/></svg></button></div>
       <textarea id="sc-text" rows="2" placeholder="e.g. 2 alpha on target 1, 1 bravo 1 alpha on target 2"></textarea>
       <div class="vb-row"><span class="vb-heard" id="sc-heard">Alpha, Bravo, Charlie, Delta, Mike, no-shoot. "All alphas" works too.</span><button class="vb-go" id="sc-go">Score</button></div>
     </div>
     <div class="sc-table" id="sc-table"></div>
   </div></div>
+
+  <!-- HISTORY: session cards (swipe left to delete), tap one for its detail -->
+  <section id="view-history" class="view scr">
+    <div class="hs-head"><div class="p-title" style="margin:0">History</div></div>
+    <div class="hs-best" id="hs-best"></div>
+    <div class="hs-pills" role="group" aria-label="Filter"><button class="on" data-f="all">All</button><button data-f="range">Range</button><button data-f="dry">Dry fire</button></div>
+    <button class="hs-live" id="hs-live" hidden><span class="dot"></span><div><b id="hs-live-t"></b><i id="hs-live-s"></i></div><span class="sb-go">Resume ›</span></button>
+    <div id="hs-body"></div>
+  </section>
+  <section id="view-session" class="view scr">
+    <button class="p-back" id="ses-back">‹ History</button>
+    <div class="hd-title"><div class="p-title" style="margin:0" id="ses-title-h">Session</div><i id="hd-sub"></i></div>
+    <div class="hd-stats" id="hd-stats"></div>
+    <div class="hd-who" id="hd-who" role="group" aria-label="Shooters"></div>
+    <div id="hd-body"></div>
+    <div class="hd-acts"><button class="p-btn2" id="ses-exp">Export CSV</button><button class="p-btn2" id="ses-clips">Share clips</button><button class="p-btn2 hd-del" id="ses-del">Delete</button></div>
+  </section>
 
   <nav class="tabs">
     <button data-view="train" class="tab active"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M10 2h4"/></svg>Train</button>
@@ -142,25 +159,12 @@
   </nav>
 </main>
 
-  <!-- HISTORY (all sessions) -->
-  <section id="view-history" class="view legacy">
-    <header class="bar"><h1>History</h1><button id="btn-export" class="btn ghost small">Export all</button></header>
-    <div id="hist-summary" class="summary"></div>
-    <div id="history" class="history"></div>
-  </section>
-
-  <!-- SESSION DETAIL (History › session) -->
-  <section id="view-session" class="view legacy">
-    <div class="menu-head"><button class="back" id="ses-back">‹ History</button><h1 id="ses-title-h">Session</h1></div>
-    <div id="ses-detail" class="ses-detail"></div>
-  </section>
-
   <!-- SETTINGS -->
   <section id="view-settings" class="view legacy">
     <header class="bar"><h1>Settings</h1></header>
     <div class="form">
       <h2>Look</h2>
-      <label class="row"><span>Style</span><select id="set-skin"><option value="soft">Clean light</option><option value="current">Dark</option><option value="softdark">Soft dark</option></select></label>
+      <label class="row"><span>Style</span><select id="set-skin"><option value="softdark">Soft dark</option><option value="soft">Clean light</option><option value="current">Dark</option></select></label>
 
       <h2>Start beep</h2>
       <label class="row"><span>Random delay min (s)</span><input id="set-dmin" type="number" min="0" max="30" step="0.5"></label>
@@ -186,7 +190,7 @@
 
       <h2>Training film</h2>
       <label class="row"><span>Camera</span><select id="set-cam"><option value="user">Front (see the overlay)</option><option value="environment">Back (better video)</option></select></label>
-      <p class="hint">Tap 🎥 Film on the timer screen, run your drills, tap it again to stop. The clip is kept on this phone until you delete it.</p>
+      <p class="hint">Tap Film on the timer screen, run your drills, tap it again to stop. The clip is kept on this phone until you delete it.</p>
 
       <h2>Detection</h2>
       <label class="row col"><span>Sensitivity <b id="lbl-sens"></b></span><input id="set-sens" type="range" min="1" max="10" step="1"></label>
@@ -211,6 +215,7 @@
       <button id="btn-diag-share" class="btn ghost small">Share beep recording</button>
 
       <h2>Data</h2>
+      <button id="btn-export" class="btn small">Export all history (CSV)</button>
       <button id="btn-clear" class="btn danger small">Delete all history</button>
       <p class="hint" id="build"></p>
     </div>
