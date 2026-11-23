@@ -38,8 +38,10 @@
       const w = t[i];
       // name: "call it X" / "named X" / "name X"
       if ((w === 'call' && t[i + 1] === 'it') || w === 'named' || (w === 'name' && t[i + 1] !== ',')) {
-        const s = i + (w === 'call' ? 2 : 1); const nm = []; for (let k = s; k < t.length && t[k] !== ','; k++) nm.push(t[k]);
-        if (nm.length) { d.name = nm.join(' ').replace(/\b\w/g, (c) => c.toUpperCase()); heard.push(`name: ${d.name}`); i = s + nm.length; continue; }
+        // the name runs until a pause, a number or a drill word ("call it doubles 2 shots on target 1" -> Doubles)
+        const stop = /^(\d+(\.\d+)?|under|par|within|from|target|targets|then|with)$/;
+        const s = i + (w === 'call' ? 2 : 1); const nm = []; for (let k = s; k < t.length && t[k] !== ',' && !stop.test(t[k]); k++) nm.push(t[k]);
+        if (nm.length) { d.name = nm.join(' ').replace(/\b\w/g, (c) => c.toUpperCase()); heard.push(`name: ${d.name}`); i = s + nm.length - 1; continue; }
       }
       if (/^(reload|reloads|reloading|mag)$/.test(w) && !(t[i - 1] === 'no')) { d.steps.push({ reload: true }); heard.push('reload'); continue; }
       // "target 2 at 10 yards" / "target 2 is 10 yards" / "10 yard target 2"

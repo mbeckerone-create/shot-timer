@@ -1,6 +1,6 @@
 // Offline cache so the timer works at a range with no signal. Bump VERSION on every release.
-const VERSION = 'st-v0.7.1';
-const FILES = ['./', 'index.html', 'style.css', 'app.js', 'detector.js', 'worklet.js', 'manifest.webmanifest', 'icon-180.png', 'icon-512.png'];
+const VERSION = 'st-v0.8.0';
+const FILES = ['./', 'index.html', 'style.css', 'design.css', 'app-skin.css', 'app.js', 'ui.js', 'voice.js', 'detector.js', 'worklet.js', 'manifest.webmanifest', 'icon-180.png', 'icon-512.png'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(VERSION).then((c) => c.addAll(FILES))); self.skipWaiting(); });
 self.addEventListener('activate', (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== VERSION).map((k) => caches.delete(k))))); self.clients.claim(); });
 self.addEventListener('fetch', (e) => {

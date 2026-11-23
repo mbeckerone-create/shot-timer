@@ -1,97 +1,173 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-skin="soft">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover,user-scalable=no">
 <title>Shot Timer</title>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Shot Timer">
-<meta name="theme-color" content="#0d0f12">
+<meta name="theme-color" content="#e4e5e8">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="design.css">
+<link rel="stylesheet" href="app-skin.css">
 </head>
 <body>
-<main id="app">
+<!-- training film: full-screen camera behind the app (outside the scaled UI so it fills the screen) -->
+<div class="camwrap"><video id="cam" playsinline muted autoplay></video>
+  <div class="cam-over"><div id="cam-status" class="cam-status"></div><div id="cam-events" class="cam-events"></div><div class="cam-rec">● REC</div></div></div>
 
-  <!-- MAIN MENU -->
-  <section id="view-home" class="view menu active">
-    <div class="menu-head"><h1>Shot Timer</h1><p class="hint">Pick what you're training.</p></div>
-    <button class="menu-btn" data-go="range"><b>Range</b><span>Live fire · shots, splits, first-shot time</span></button>
-    <button class="menu-btn dry" data-go="dry"><b>Dry fire</b><span>Trigger · Draw · Reload</span></button>
-    <button class="clip-note" id="clip-note" hidden></button>
-    <p class="hint home-build" id="home-build"></p>
-  </section>
+<main id="app" class="phone proto" data-skin="soft">
 
-  <section id="view-drymenu" class="view menu">
-    <div class="menu-head"><button class="back" data-back="home">‹ Back</button><h1>Dry fire</h1></div>
-    <button class="menu-btn dry" data-drill="trigger"><b>Trigger</b><span>Beep → trigger click</span></button>
-    <button class="menu-btn dry" data-drill="draw"><b>Draw</b><span>Reaction · shot · draw-to-shot split</span></button>
-    <button class="menu-btn dry" data-drill="reload"><b>Reload</b><span>First shot · reload time to the next shot</span></button>
-  </section>
-
-  <!-- TIMER (a drill) -->
-  <section id="view-timer" class="view">
-    <div class="drill-head">
-      <button class="back" id="btn-back">‹ Back</button>
-      <div class="drill-title"><b id="drill-title">Range</b><span id="ses-text"></span></div>
-      <div class="seg small" id="seg-rep"><button data-rep="single">Single</button><button data-rep="repeat">Repeat</button></div>
+  <!-- HOME -->
+  <section id="view-home" class="view scr active">
+    <div class="h-top"><div class="p-title" style="margin:0">Shot Timer</div></div>
+    <button class="sbar h-ses" id="h-ses" hidden><span class="dot"></span><div><b>Session in progress</b><i id="h-ses-sum"></i></div><span class="sb-go">Resume ›</span></button>
+    <div class="h-modes"><button class="h-mode" data-go="range"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.5"/><path d="M12 1v4M12 19v4M1 12h4M19 12h4"/></svg><b>Range</b></button>
+      <button class="h-mode" data-go="dry"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h13l2-2h3v5h-5l-1 2H9l-1 6H4l1-6H3z"/></svg><b>Dry fire</b></button></div>
+    <div class="h-week h-year">
+      <div class="hy-grid" id="hy-grid" role="group" aria-label="Training days this year"></div>
+      <div class="hy-foot"><span class="h-day" id="hy-year">2026</span><span class="hy-sel" id="h-day"></span></div>
     </div>
-    <header class="bar">
-      <button id="chip-shooter" class="chip" aria-label="Shooter"><span class="chip-k">Shooter</span><span id="lbl-shooter">—</span></button>
-      <button id="chip-gun" class="chip" aria-label="Gun"><span class="chip-k">Gun</span><span id="lbl-gun">—</span></button>
-      <button id="chip-film" class="chip film" aria-label="Film training clip"><span class="chip-k">🎥 Film</span><span id="lbl-film">Off</span></button>
-    </header>
+    <div class="h-row"><span class="h-k">Drills</span><button class="h-link" id="h-seeall">See all</button></div>
+    <div class="h-carousel" id="h-car"></div>
+    <button class="h-pr" id="h-pr"><span class="h-k">Best first shot</span><b id="h-prtxt">—</b><i id="h-prwhen"></i></button>
+    <button class="clip-note" id="clip-note" hidden></button>
+    <p class="p-hint home-build" id="home-build"></p>
+  </section>
 
-    <div class="camwrap"><video id="cam" playsinline muted autoplay></video>
-      <div class="cam-over"><div id="cam-status" class="cam-status"></div><div id="cam-events" class="cam-events"></div><div class="cam-rec">● REC</div></div></div>
+  <!-- RANGE: one session per trip -->
+  <section id="view-range" class="view scr">
+    <button class="p-back" data-back="home">‹ Home</button><div class="p-title" style="margin:0">Range</div>
+    <div class="sescard" id="ses-card">
+      <div class="sc-top"><span class="dot" id="ses-dot"></span><b class="sc-name" id="ses-title">Session</b><div class="hub-who sc-who" id="hub-who" role="group" aria-label="Who is shooting this session"></div><button class="sc-tog" id="sc-tog" aria-expanded="false" aria-controls="sc-more" aria-label="Add people"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button><button class="ses-go" id="ses-go" hidden>Shoot</button><button class="ses-btn" id="ses-btn">Start</button></div>
+      <div class="sc-more" id="sc-more"><div class="sc-more-in">
+        <div class="sc-line"></div>
+        <div class="sc-row2">
+          <div class="hub-who sc-added" id="hub-added" role="group" aria-label="People added to this session"></div>
+          <div class="who-search"><input id="who-q" type="search" autocomplete="off" enterkeyhint="done" placeholder="Search shooters" aria-label="Search shooters"><div class="who-results" id="who-results" hidden></div></div>
+        </div>
+      </div></div>
+    </div>
+    <div class="p-glabel">Drills</div>
+    <div class="p-group hub-dlist" id="hub-dlist"></div>
+    <button class="p-new" id="hub-new">New drill</button>
+    <div class="p-glabel">This session</div>
+    <div class="p-group hub-log" id="hub-log"></div>
+  </section>
 
-    <div class="readout">
-      <div id="status" class="status">Ready</div>
-      <div id="big" class="big">0.000</div>
-      <div class="stats">
-        <div><span class="k" id="k-count">Shots</span><span id="s-count" class="v">0</span></div>
-        <div><span class="k" id="k-first">First</span><span id="s-first" class="v">—</span></div>
-        <div><span class="k" id="k-split">Split</span><span id="s-split" class="v">—</span></div>
-        <div><span class="k" id="k-avg">Avg split</span><span id="s-avg" class="v">—</span></div>
+  <!-- DRY FIRE -->
+  <section id="view-drymenu" class="view scr">
+    <button class="p-back" data-back="home">‹ Home</button><div class="p-title" style="margin:0">Dry fire</div>
+    <div class="sbar" id="dry-sbar"><span class="dot"></span><div><b id="dry-ses-t">Session</b><i id="dry-ses-sum">Starts when you pick a drill</i></div><button class="sb-end" id="dry-end">End</button></div>
+    <div class="p-group"><button class="p-menu dry" data-drill="trigger"><b>Trigger</b><span>Beep → trigger click</span></button>
+      <button class="p-menu dry" data-drill="draw"><b>Draw</b><span>Reaction · shot · draw-to-shot split</span></button>
+      <button class="p-menu dry" data-drill="reload"><b>Reload</b><span>First shot · reload time to the next shot</span></button></div>
+  </section>
+
+  <!-- DRILL EDITOR: describe it first, the full editor below -->
+  <section id="view-editor" class="view scr">
+    <div class="p-head"><button class="p-back" id="p-ed-cancel">‹ Cancel</button><div class="t"><b id="p-ed-title">New drill</b></div><button class="p-back p-save" id="p-save">Save</button></div>
+    <div class="ed-scroll">
+      <div class="ed-hero" id="ed-hero">
+        <div class="eh-title">Describe it</div>
+        <div class="eh-field"><input id="vb-text" type="text" enterkeyhint="done" autocomplete="off" placeholder="2 shots on target 1, 5 reps under 4 s" aria-label="Describe the drill"><button class="vb-mic" id="vb-mic" aria-label="Speak the drill">🎙</button></div>
+        <div class="vb-heard eh-heard" id="vb-heard">Say it or type it. Press done when you finish.</div>
+        <button class="eh-edit" id="eh-edit">Edit drill<span aria-hidden="true">⌄</span></button>
+      </div>
+      <div class="ed-detail-start" id="ed-detail"></div>
+      <div class="p-form">
+        <label class="p-field"><span>Name</span><input id="p-f-name" value="" maxlength="28"></label>
+        <div class="p-field col"><span>Start from</span><div class="p-seg p-seg3" id="p-f-start"><button data-v="holster">Holster</button><button data-v="ready" class="on">Ready</button><button data-v="low ready">Low ready</button></div></div>
+      </div>
+      <div class="p-glabel">Targets</div>
+      <div class="p-form" id="ed-targets"></div>
+      <div class="p-glabel">String · what you do after one beep, in order</div>
+      <div class="p-form" id="ed-steps"></div>
+      <div class="ed-add"><button class="p-new" id="ed-add-shots">+ Shots</button><button class="p-new" id="ed-add-reload">+ Reload</button></div>
+      <div class="p-glabel">Reps</div>
+      <div class="p-form">
+        <div class="p-field"><span>Each string under</span><div class="p-step"><button data-f="par" data-d="-0.25" aria-label="Shorter par">–</button><b id="p-f-par">5.00</b> s<button data-f="par" data-d="0.25" aria-label="Longer par">+</button></div></div>
+        <div class="p-field"><span>Reps</span><div class="p-step"><button data-f="reps" data-d="-1" aria-label="Fewer reps">–</button><b id="p-f-reps">5</b><button data-f="reps" data-d="1" aria-label="More reps">+</button></div></div>
+        <div class="p-field"><span>Reset between reps</span><div class="p-step"><button data-f="reset" data-d="-1" aria-label="Shorter reset">–</button><b id="p-f-reset">6</b> s<button data-f="reset" data-d="1" aria-label="Longer reset">+</button></div></div>
+      </div>
+      <button class="h-link dt-del" id="p-ed-del" style="margin:4px auto 0">Delete drill</button>
+    </div>
+  </section>
+
+  <!-- TIMER (free shooting, a drill, or a dry-fire drill) -->
+  <section id="view-timer" class="view scr">
+    <div class="p-head"><button class="p-back" id="btn-back">‹ Back</button><div class="t"><b id="drill-title">Range</b><i id="ses-text"></i></div>
+      <div class="p-seg" id="seg-rep"><button data-rep="single">Single</button><button data-rep="repeat">Repeat</button></div></div>
+    <div class="p-chips"><button class="p-chip" id="chip-shooter" aria-label="Shooter"><i>Shooter</i><b id="lbl-shooter">—</b></button>
+      <button class="p-chip" id="chip-gun" aria-label="Gun"><i>Gun</i><b id="lbl-gun">—</b></button>
+      <button class="p-chip film" id="chip-film" aria-label="Film training clip"><i>🎥 Film</i><b id="lbl-film">Off</b></button></div>
+    <div class="p-plan" id="p-plan" hidden><div class="pl-top"><b id="pl-round">Rep 1 of 5</b><span id="pl-do"></span></div><div class="pl-steps" id="pl-steps"></div><div class="pl-dots" id="pl-dots"></div></div>
+    <div class="p-read readout" id="p-read">
+      <div class="p-status" id="status">Ready</div>
+      <svg class="p-gauge" id="p-gauge" viewBox="0 0 200 104" aria-hidden="true"></svg>
+      <div class="p-big"><span id="big">0.000</span><small>s</small></div>
+      <div class="p-stats">
+        <div><i id="k-count">Shots</i><b id="s-count">0</b></div>
+        <div><i id="k-first">First</i><b id="s-first">—</b></div>
+        <div><i id="k-split">Split</i><b id="s-split">—</b></div>
+        <div><i id="k-avg">Avg split</i><b id="s-avg">—</b></div>
       </div>
       <div class="meter" aria-hidden="true"><div id="meter-fill"></div><div id="meter-thr"></div></div>
-      <div id="beepinfo" class="hint"></div>
+      <div class="p-sub" id="beepinfo"></div>
+      <div class="p-res" id="p-res"></div>
     </div>
-
     <ol id="shotlist" class="shotlist"></ol>
-
-    <div class="controls">
-      <button id="btn-main" class="btn primary big-btn">START</button>
-      <button id="btn-review" class="btn ghost" disabled>Save</button>
-    </div>
+    <div class="p-ctrl controls"><button class="p-btn" id="btn-main">START</button><button class="p-btn2" id="btn-review" disabled>Score…</button></div>
   </section>
 
-  <!-- HISTORY -->
-  <section id="view-history" class="view">
+  <!-- voice scoring sheet -->
+  <div class="p-dlg" id="p-score" hidden><div>
+    <div class="vb-top"><h4 id="sc-title">Score string</h4><button class="p-back" id="sc-close">Done</button></div>
+    <div class="vbox">
+      <div class="vb-top"><b>Say the hits</b><button class="vb-mic" id="sc-mic" aria-label="Speak the hits">🎙</button></div>
+      <textarea id="sc-text" rows="2" placeholder="e.g. 2 alpha on target 1, 1 bravo 1 alpha on target 2"></textarea>
+      <div class="vb-row"><span class="vb-heard" id="sc-heard">Alpha, Bravo, Charlie, Delta, Mike, no-shoot. "All alphas" works too.</span><button class="vb-go" id="sc-go">Score</button></div>
+    </div>
+    <div class="sc-table" id="sc-table"></div>
+  </div></div>
+
+  <nav class="tabs">
+    <button data-view="train" class="tab active"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M10 2h4"/></svg>Train</button>
+    <button data-view="history" class="tab"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5zM9 9h6M9 13h6M9 17h3"/></svg>History</button>
+    <button data-view="settings" class="tab"><svg class="ti" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>Settings</button>
+  </nav>
+</main>
+
+  <!-- HISTORY (all sessions) -->
+  <section id="view-history" class="view legacy">
     <header class="bar"><h1>History</h1><button id="btn-export" class="btn ghost small">Export all</button></header>
     <div id="hist-summary" class="summary"></div>
     <div id="history" class="history"></div>
   </section>
 
   <!-- SESSION DETAIL (History › session) -->
-  <section id="view-session" class="view">
-    <div class="menu-head"><button class="back" id="ses-back">‹ History</button><h1 id="ses-title">Session</h1></div>
+  <section id="view-session" class="view legacy">
+    <div class="menu-head"><button class="back" id="ses-back">‹ History</button><h1 id="ses-title-h">Session</h1></div>
     <div id="ses-detail" class="ses-detail"></div>
   </section>
 
   <!-- SETTINGS -->
-  <section id="view-settings" class="view">
+  <section id="view-settings" class="view legacy">
     <header class="bar"><h1>Settings</h1></header>
     <div class="form">
+      <h2>Look</h2>
+      <label class="row"><span>Style</span><select id="set-skin"><option value="soft">Clean light</option><option value="current">Dark</option><option value="softdark">Soft dark</option></select></label>
+
       <h2>Start beep</h2>
       <label class="row"><span>Random delay min (s)</span><input id="set-dmin" type="number" min="0" max="30" step="0.5"></label>
       <label class="row"><span>Random delay max (s)</span><input id="set-dmax" type="number" min="0" max="30" step="0.5"></label>
       <label class="row"><span>Beep pitch (Hz)</span><input id="set-hz" type="number" min="800" max="4000" step="100"></label>
       <label class="row"><span>Beep length (ms)</span><input id="set-blen" type="number" min="100" max="800" step="50"></label>
-      <label class="row"><span>Par time (s, 0 = off)</span><input id="set-par" type="number" min="0" max="60" step="0.05"></label>
+      <label class="row"><span>Par time for free shooting (s, 0 = off)</span><input id="set-par" type="number" min="0" max="60" step="0.05"></label>
 
       <h2>Range</h2>
       <label class="row"><span>Ignore sounds quieter than my shots by (dB, 0 = off)</span><input id="set-gate" type="number" min="0" max="40" step="1"></label>
@@ -110,7 +186,7 @@
 
       <h2>Training film</h2>
       <label class="row"><span>Camera</span><select id="set-cam"><option value="user">Front (see the overlay)</option><option value="environment">Back (better video)</option></select></label>
-      <p class="hint">Tap 🎥 Film on the Timer screen, run your drills, tap it again to stop and share the clip + log.</p>
+      <p class="hint">Tap 🎥 Film on the timer screen, run your drills, tap it again to stop. The clip is kept on this phone until you delete it.</p>
 
       <h2>Detection</h2>
       <label class="row col"><span>Sensitivity <b id="lbl-sens"></b></span><input id="set-sens" type="range" min="1" max="10" step="1"></label>
@@ -120,7 +196,7 @@
       <label class="row"><span>Auto-stop after quiet (s, 0 = off)</span><input id="set-auto" type="number" min="0" max="60" step="1"></label>
 
       <h2>Shooters &amp; guns</h2>
-      <label class="row col"><span>Shooters (one per line)</span><textarea id="set-shooters" rows="4"></textarea></label>
+      <label class="row col"><span>Shooters (one per line, first is you)</span><textarea id="set-shooters" rows="4"></textarea></label>
       <label class="row col"><span>Guns (one per line)</span><textarea id="set-guns" rows="4"></textarea></label>
 
       <h2>Test with a recording</h2>
@@ -140,22 +216,19 @@
     </div>
   </section>
 
-  <nav class="tabs">
-    <button data-view="train" class="tab active">Train</button>
-    <button data-view="history" class="tab">History</button>
-    <button data-view="settings" class="tab">Settings</button>
-  </nav>
 
-  <dialog id="ses-dlg"><form method="dialog"><h3>Session ended</h3><p class="hint" id="ses-dlg-info"></p>
-    <p class="hint">Exports only this session: a CSV of every shot/rep and a .json with the settings used.</p>
-    <button id="btn-ses-export" class="btn primary">Export session</button> <button id="btn-ses-close" class="btn ghost">Done</button></form></dialog>
-  <dialog id="film-dlg"><form method="dialog"><h3>Training clip ready</h3><p class="hint" id="film-info"></p>
-    <p class="hint" id="film-kept"></p>
-    <p class="hint"><b>Save to camera roll</b>: tap Save Video. <b>Clip + log</b>: Save to Files → Dropbox, keeps the name so it matches the session export.</p>
-    <button id="btn-film-roll" class="btn primary">Save to camera roll</button> <button id="btn-film-share" class="btn ghost">Clip + log</button> <button id="btn-film-close" class="btn ghost">Later</button></form></dialog>
-  <dialog id="picker"><form method="dialog"><h3 id="picker-title"></h3><div id="picker-list"></div><button class="btn ghost" value="cancel">Cancel</button></form></dialog>
-</main>
+<dialog id="ses-dlg"><form method="dialog"><h3>Session ended</h3><p class="hint" id="ses-dlg-info"></p>
+  <p class="hint">Exports only this session: a CSV of every shot/rep and a .json with the settings used.</p>
+  <button id="btn-ses-export" class="btn primary">Export session</button> <button id="btn-ses-close" class="btn ghost">Done</button></form></dialog>
+<dialog id="film-dlg"><form method="dialog"><h3>Training clip ready</h3><p class="hint" id="film-info"></p>
+  <p class="hint" id="film-kept"></p>
+  <p class="hint"><b>Save to camera roll</b>: tap Save Video. <b>Clip + log</b>: Save to Files → Dropbox, keeps the name so it matches the session export.</p>
+  <button id="btn-film-roll" class="btn primary">Save to camera roll</button> <button id="btn-film-share" class="btn ghost">Clip + log</button> <button id="btn-film-close" class="btn ghost">Later</button></form></dialog>
+<dialog id="picker"><form method="dialog"><h3 id="picker-title"></h3><div id="picker-list"></div><button class="btn ghost" value="cancel">Cancel</button></form></dialog>
+<div class="toast-host" id="toast-host"></div>
 <script src="detector.js"></script>
+<script src="voice.js"></script>
 <script src="app.js"></script>
+<script src="ui.js"></script>
 </body>
 </html>

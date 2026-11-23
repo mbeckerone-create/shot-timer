@@ -10,7 +10,7 @@ const { chromium } = require('playwright');
   const p = await ctx.newPage(); const errs = []; p.on('pageerror', (e) => errs.push(e.message)); p.on('dialog', (d) => d.accept());
   await p.addInitScript(() => localStorage.setItem('st.settings', JSON.stringify({ mode: 'dry', dryDrill: 'trigger', dryRepeat: true, sens: 10, dmin: 0.5, dmax: 1, rangeReset: 2, auto: 3 })));
   await p.goto('http://localhost:8765/?v=' + Date.now());
-  await p.click('.menu-btn[data-go="range"]'); await p.waitForTimeout(300);
+  await p.click('.h-mode[data-go="range"]'); await p.waitForTimeout(300); await p.click('#ses-btn'); await p.waitForTimeout(300);   // v0.8: Range screen, Start = session + free shooting
   await p.click('#seg-rep button[data-rep="repeat"]');
   console.log('after Repeat tap: mode =', await p.evaluate(() => S.mode), '| status:', await p.textContent('#status'));
   await p.click('#chip-film'); await p.waitForTimeout(1200);

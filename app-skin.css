@@ -1,0 +1,81 @@
+/* App layer on top of design.css. The design board draws the phone 300 px wide; the app scales that same layout
+   up to the real screen with CSS zoom (--z is set by ui.js from the screen width), so it looks exactly like the board. */
+html, body { background: var(--root-bg, #e4e5e8); color-scheme: light; }
+html[data-skin="current"], html[data-skin="softdark"] { color-scheme: dark; }
+html[data-skin="soft"] { --root-bg: #e4e5e8; } html[data-skin="current"] { --root-bg: #0d0f12; } html[data-skin="softdark"] { --root-bg: #0e0f11; }
+
+#app.phone.proto { --z: 1.3; zoom: var(--z); width: calc(100vw / var(--z)); height: calc(100dvh / var(--z)); max-width: none; aspect-ratio: auto;
+  border: 0; border-radius: 0; box-shadow: none; padding: 0; position: relative; overflow: hidden; user-select: none; -webkit-user-select: none; }
+#app input, #app textarea { user-select: text; -webkit-user-select: text; }
+#app .view:not(.active) { display: none !important; }
+#app .view.scr { padding: calc(env(safe-area-inset-top, 0px) / var(--z) + 8px) 11px 8px; overflow-y: auto; scrollbar-width: none; }
+#app .view.scr::-webkit-scrollbar { display: none; }
+#app .view.scr > * { flex-shrink: 0; }
+#app #view-timer.scr { overflow: hidden; }
+#app #view-timer.scr > .shotlist { flex: 1 1 auto; min-height: 40px; }
+#app #view-editor.scr { overflow: hidden; }
+
+/* tab bar: three tabs, clear of the home indicator */
+#app .tabs { margin-top: auto; grid-template-columns: repeat(3, 1fr); padding-bottom: calc(env(safe-area-inset-bottom, 0px) / var(--z) + 6px); }
+#app .tabs .tab { font-size: 10.5px; font-weight: 600; color: var(--p-muted); padding: 6px 0 0; display: flex; flex-direction: column; align-items: center; gap: 2px; background: none; border: 0; }
+#app .tabs .tab.active { color: var(--p-accent); }
+#app[data-skin="soft"] .tabs .tab.active { color: var(--p-text); }
+
+/* timer readout bits that came from the old screen */
+#app .p-read.go { border-color: var(--p-ok); }
+#app .meter { height: 4px; margin-top: 8px; background: var(--p-panel2); border-radius: 2px; position: relative; overflow: hidden; }
+#app #meter-fill { background: var(--p-ok); } #app #meter-fill.hot { background: var(--p-mark); }
+#app #meter-thr { background: var(--p-text); width: 1.5px; }
+#app .p-status.standby { color: #e0a800; } #app .p-status.err { color: #ff3b30; }
+#app .p-btn.standby { background: #e0a800; color: #1a1300; }
+#app .p-btn2:disabled { opacity: .45; }
+#app .p-seg[hidden] { display: grid !important; visibility: hidden; }
+#app .shotlist { list-style: none; margin: 0; padding: 0; overflow-y: auto; font-family: var(--p-num); font-size: 11px; }
+#app .shotlist li { display: grid; grid-template-columns: 22px 1fr 1fr 22px; gap: 6px; align-items: center; padding: 6px; border-bottom: 1px solid var(--p-line); font-variant-numeric: tabular-nums; }
+#app[data-skin="soft"] .shotlist li { border-bottom-color: #d4d5d9; }
+#app .shotlist li.head { color: var(--p-muted); font-family: -apple-system, system-ui, sans-serif; font-size: 8px; text-transform: uppercase; letter-spacing: .06em; border: 0; padding-bottom: 2px; }
+#app .shotlist li .n, #app .shotlist li .sp { color: var(--p-muted); } #app .shotlist li .sp { text-align: right; }
+#app .shotlist li .t { font-weight: 600; } #app .shotlist li.removed { opacity: .4; text-decoration: line-through; }
+#app .shotlist .x { background: none; border: 0; color: var(--p-muted); font-size: 14px; padding: 0; }
+#app .p-chip b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#app .p-chip.rec { border-color: #ff3b30; } #app .p-chip.rec b { color: #ff3b30; }
+
+/* History, session detail and Settings sit outside the scaled UI (no zoom) and keep their own layout at the phone's
+   native size, in the current style's colours; they fill the screen above the tab bar */
+body > .view.legacy { position: fixed; left: 0; right: 0; top: 0; bottom: var(--tabh, 80px); z-index: 5; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding: calc(env(safe-area-inset-top, 0px) + 8px) 16px 16px; background: var(--bg); color: var(--text); font-size: 16px; }
+body > .view.legacy > * { flex-shrink: 0; }
+body > .view.legacy h1 { font-size: 28px; }
+body > .view.legacy .tag { background: rgba(128,128,128,.18); color: var(--text); }
+html[data-skin="soft"] body > .view.legacy { --line: #e3e3e8; }
+
+/* film: camera full screen behind a see-through UI */
+body.filming { background: #000; }
+body.filming #app.proto, body.filming #app .view.scr { background: transparent; }
+body.filming #app .p-read, body.filming #app .p-chip, body.filming #app .p-plan, body.filming #app .tabs, body.filming #app .p-head { background: rgba(10,12,15,.55); color: #fff;
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); border-color: rgba(255,255,255,.16); box-shadow: none; }
+body.filming #app .shotlist { display: none; }
+body.filming #app .p-read { margin-top: auto; }
+
+/* toasts */
+.toast-host { position: fixed; left: 0; right: 0; bottom: calc(env(safe-area-inset-bottom, 0px) + 84px); display: flex; justify-content: center; pointer-events: none; z-index: 30; }
+.toast-host .toast { position: static; transform: none; background: #1b1d21; color: #fff; padding: 10px 16px; border-radius: 12px; font: 600 14px -apple-system, system-ui, sans-serif; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+
+dialog { background: var(--dlg-bg, #fff); color: var(--dlg-fg, #1b1d21); border: 0; }
+html[data-skin="current"] dialog, html[data-skin="softdark"] dialog { --dlg-bg: #1a1b1f; --dlg-fg: #f4f4f5; }
+dialog .btn { margin-top: 6px; }
+
+/* dialogs and the old screens' buttons read these page-level colours */
+html[data-skin="soft"]:root { --bg: #e4e5e8; --panel: #ffffff; --panel2: #f2f2f7; --line: #dcdde2; --text: #1b1d21; --muted: #6e7380; --accent: #e85d00; --accent-ink: #fff; --ok: #34a853; --bad: #e5352b; }
+html[data-skin="softdark"]:root { --bg: #0e0f11; --panel: #1a1b1f; --panel2: #232429; --line: #2b2d33; --text: #f4f4f5; --muted: #8b8e97; --accent: #ff6a1a; --accent-ink: #fff; }
+
+/* fixes after the first run on a phone-sized screen */
+#app #view-timer.scr { overflow-y: auto; }
+#app #view-timer:has(#p-plan:not([hidden])) .p-gauge { display: none !important; }   /* drill plan showing: drop the dial so it all fits */
+#app #view-timer.scr > .shotlist { min-height: 0; flex: 1 1 0; }
+#app .shotlist li { grid-template-columns: 22px 1fr minmax(0, 1.4fr) 22px; }
+#app .shotlist li .sp { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#app .ed-row .grow { white-space: nowrap; }
+html[data-skin="current"]:root { --bg: #0d0f12; --panel: #171a1f; --panel2: #1f242b; --line: #2a3038; --text: #f2f4f7; --muted: #8b95a3; --accent: #ff7a1a; --accent-ink: #1a0d00; --ok: #3ddc84; --bad: #ff5a5a; }
+/* the design board's own ".bar" (its checklist progress bar) must not style the History / Settings headers */
+body > .view.legacy .bar { all: unset; display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 12px 0; }

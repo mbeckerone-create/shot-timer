@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.7.1';
+const BUILD = 'v0.8.0';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -181,10 +181,18 @@ function scheduleBeep(at, ms) {
 // ---------- timer state machine ----------
 // idle -> standby (waiting for random beep) -> live (listening) -> done (review)
 const BEEP_GAIN = 0.9;
-const T = { series: [], seriesOn: false, nextTimer: null, repTimer: null, learning: null, beepGain: BEEP_GAIN, beepOut: 'webaudio', genPeak: null, sessAtSchedule: '', sessAtBeep: '', state: 'idle', beepAt: 0, pending: [], raf: 0, beepFrame: null, acoustic: false, shots: [], oscs: [], lastActivity: 0, delay: 0, autoTimer: null, wakeLock: null };
+const T = { preset: null, drillRes: [], series: [], seriesOn: false, nextTimer: null, repTimer: null, learning: null, beepGain: BEEP_GAIN, beepOut: 'webaudio', genPeak: null, sessAtSchedule: '', sessAtBeep: '', state: 'idle', beepAt: 0, pending: [], raf: 0, beepFrame: null, acoustic: false, shots: [], oscs: [], lastActivity: 0, delay: 0, autoTimer: null, wakeLock: null };
 
+// A drill run (from the Range screen): T.preset = {name, steps, shots, reps, par, reset}. Each rep is one string with
+// its own random beep; the string ends once its shots are in; after the last rep the drill is done.
+function presetPar() { return T.preset ? T.preset.par : S.par; }
+function drillStatus() { return T.preset ? `Rep ${Math.min(T.drillRes.length + 1, T.preset.reps)} of ${T.preset.reps}` : ''; }
 async function onMain() {
   if (T.learning) return finishLearn();
+  if (T.preset) {
+    if (T.state === 'idle' || T.state === 'done') { if (T.drillRes.length >= T.preset.reps) T.drillRes = []; T.seriesOn = true; T.series = []; window.UI && UI.renderPlan(); return start(); }
+    return stopSeries();
+  }
   if (isDry()) {
     if (T.state === 'idle' || T.state === 'done') { T.seriesOn = S.dryRepeat; T.series = []; return start(); }
     return stopSeries();                                 // standby / live / reholster: end the drill
@@ -215,11 +223,13 @@ async function start() {
       Math.max(0, (beepAt - audio.ctx.currentTime) * 1000));
   } else T.oscs = [scheduleBeep(beepAt, S.blen)];
   if (film.on) filmLog('beep_scheduled', { beepAt, mode: S.mode, drill: S.dryDrill, delay: +T.delay.toFixed(3) });
-  const parAt = [];
-  if (S.par > 0) { parAt.push(beepAt + S.par); T.oscs.push(scheduleBeep(beepAt + S.par, S.blen)); }
+  const parAt = [], par = presetPar();
+  if (par > 0) { parAt.push(beepAt + par); T.oscs.push(scheduleBeep(beepAt + par, S.blen)); }
+  $('p-res').textContent = par > 0 ? `Par ${par.toFixed(2)} s` : ''; $('p-res').className = 'p-res p-par';
   audio.node.port.postMessage({ type: 'params', params: detParams() });
   audio.node.port.postMessage({ type: 'arm', beepAt, parAt, beepMs: S.blen, beepHz: S.hz, latency: latencyEstimate() });
-  T.state = 'standby'; setStatus(T.seriesOn ? `${isDry() ? 'Rep' : 'String'} ${T.series.length + 1} · standby` : 'Standby', 'standby'); $('big').textContent = '0.000';
+  T.state = 'standby'; setStatus(T.preset ? `${drillStatus()} · standby` : T.seriesOn ? `${isDry() ? 'Rep' : 'String'} ${T.series.length + 1} · standby` : 'Standby', 'standby'); $('big').textContent = '0.000';
+  window.UI && UI.renderPlan();
   $('beepinfo').textContent = '';
   setMain(T.seriesOn ? 'STOP' : 'CANCEL', 'standby'); if (!isDry()) $('btn-review').disabled = true;
   T.beepAt = beepAt; cancelAnimationFrame(T.raf); T.raf = requestAnimationFrame(tick);
@@ -233,6 +243,7 @@ function tick() {
   if (T.state === 'standby' && now >= T.beepAt) goLive();
   if (T.state === 'live') {
     if (!liveShots().length) $('big').textContent = Math.max(0, now - T.beepAt).toFixed(2) + '0';
+    if (window.UI) UI.gauge(Math.max(0, now - T.beepAt));
     if (T.beepOut === 'webaudio' && now - T.beepAt < S.blen / 1000 + 0.1) {      // measure the generated beep signal
       const buf = audio.tdBuf || (audio.tdBuf = new Float32Array(audio.an.fftSize)); audio.an.getFloatTimeDomainData(buf);
       let pk = 0; for (const v of buf) pk = Math.max(pk, Math.abs(v)); T.genPeak = Math.max(T.genPeak || 0, pk);
@@ -272,6 +283,11 @@ function addShot(frame, db, bands) {
   T.shots.sort((a, b) => a.t - b.t); applyGate();
   if (!shot.removed) T.lastActivity = performance.now();   // quiet bangs (other lanes) don't keep the string open
   renderShots(); renderStats(); renderDiag();
+  if (T.preset) {
+    const n = liveShots().length; window.UI && UI.renderPlan(n);
+    setStatus(`Shot ${Math.min(n, T.preset.shots)} of ${T.preset.shots}`, 'live');
+    if (n >= T.preset.shots) { clearTimeout(T.doneTimer); T.doneTimer = setTimeout(() => { if (T.state === 'live') stop(); }, 700); }   // all shots in: end the string
+  }
 }
 
 // Own-gun gate: your gun is by far the loudest thing the phone hears (about -3 dB on the range clip of Nov 14);
@@ -299,10 +315,22 @@ function stop() {
   audio.node.port.postMessage({ type: 'disarm' });
   for (const o of T.oscs) { try { o.stop(); } catch {} }
   clearInterval(T.autoTimer); cancelAnimationFrame(T.raf);
-  const n = liveShots().length;
+  const n = liveShots().length; clearTimeout(T.doneTimer);
   T.state = 'done'; renderStats(); setStatus(n ? 'String done' : 'No shots heard');
-  setMain('START'); $('btn-review').disabled = !n; $('btn-review').textContent = 'Save';
+  setMain('START'); $('btn-review').disabled = !n; $('btn-review').textContent = 'Score…';
   autoSaveIfNeeded();
+  const par = presetPar(), s0 = summarize(liveShots());
+  if (par > 0 && n) { const d = s0.total - par; $('p-res').textContent = d <= 0 ? `✓ ${Math.abs(d).toFixed(2)} under par ${par.toFixed(2)}` : `✗ ${d.toFixed(2)} over par ${par.toFixed(2)}`; $('p-res').className = 'p-res' + (d > 0 ? ' over' : ''); }
+  if (T.preset) {                                        // a drill: record the rep, then reset or finish
+    T.drillRes.push({ v: n ? s0.total : null, ok: n > 0 && s0.total <= par, rec: T.saved });
+    window.UI && UI.renderPlan();
+    if (T.drillRes.length >= T.preset.reps) return drillDone();
+    T.state = 'reholster'; setMain('STOP', 'stop'); let left = T.preset.reset;
+    const tickDown = () => { if (T.state !== 'reholster') return; if (left <= 0) return start();
+      $('beepinfo').textContent = `Reset · rep ${T.drillRes.length + 1} in ${left} s`; left--; T.nextTimer = setTimeout(tickDown, 1000); };
+    tickDown(); return;
+  }
+  window.UI && UI.nextShooter();
   if (T.seriesOn) {                                      // repeat strings: reset, then the next random beep
     const s = summarize(liveShots()); T.series.push({ t: n ? s.total : null, n });
     if (n) setStatus(`String ${T.series.length} · ${n} shot${n > 1 ? 's' : ''} · ${fmt(s.total)}`);
@@ -401,7 +429,22 @@ function endRep(hit) {
     tickDown();
   } else { setMain('START'); releaseWake(); }
 }
+function drillDone() {
+  T.seriesOn = false; T.state = 'done'; setMain('START'); releaseWake();
+  const rr = T.drillRes, ok = rr.filter((x) => x.ok).length, vs = rr.map((x) => x.v).filter((v) => v != null);
+  setStatus(`${ok} of ${rr.length} under par`);
+  if (vs.length) { $('big').textContent = fmt(Math.min(...vs)); $('p-res').textContent = `Best ${fmt(Math.min(...vs))} · avg ${fmt(vs.reduce((a, b) => a + b, 0) / vs.length)}`; $('p-res').className = 'p-res'; }
+  $('beepinfo').textContent = 'Press Start to run it again';
+  window.UI && (UI.renderPlan(), UI.nextShooter(), UI.renderHub());
+}
 function stopSeries() {
+  if (T.preset) {
+    clearTimeout(T.nextTimer); clearTimeout(T.doneTimer); T.seriesOn = false;
+    if (T.state === 'standby' || T.state === 'live') { for (const o of T.oscs) { try { o.stop(); } catch {} } audio.node.port.postMessage({ type: 'disarm' }); cancelAnimationFrame(T.raf); }
+    if (T.state === 'live' && liveShots().length) autoSaveIfNeeded();
+    clearInterval(T.autoTimer); T.state = 'done'; setMain('START'); releaseWake(); $('beepinfo').textContent = '';
+    setStatus(T.drillRes.length ? `Stopped after ${T.drillRes.length} of ${T.preset.reps} reps` : 'Ready'); window.UI && UI.renderPlan(); return;
+  }
   clearTimeout(T.nextTimer); clearTimeout(T.repTimer); if (T.rep) clearTimeout(T.rep.tTimer); T.seriesOn = false;
   if (T.state === 'standby' || T.state === 'live') {
     for (const o of T.oscs) { try { o.stop(); } catch {} }
@@ -706,8 +749,8 @@ async function shareDiag() {
 }
 
 // ---------- rendering ----------
-function setStatus(txt, cls) { const s = $('status'); s.textContent = txt; s.className = 'status' + (cls ? ' ' + cls : ''); document.querySelector('.readout').classList.toggle('go', cls === 'live'); camStatus(txt, cls); }
-function setMain(txt, cls) { const b = $('btn-main'); b.textContent = txt; b.className = 'btn primary big-btn' + (cls ? ' ' + cls : ''); }
+function setStatus(txt, cls) { const s = $('status'); s.textContent = txt; s.className = 'p-status' + (cls ? ' ' + cls : ''); document.querySelector('.readout').classList.toggle('go', cls === 'live'); camStatus(txt, cls); }
+function setMain(txt, cls) { const b = $('btn-main'); b.textContent = txt; b.className = 'p-btn' + (cls ? ' ' + cls : ''); }
 
 function liveShots() { return T.shots.filter((s) => !s.removed).map((s) => s.t); }
 function summarize(ts) {
@@ -784,12 +827,13 @@ function autoSaveIfNeeded() {
   if (T.saved || !liveShots().length) return;
   const rec = {
     id: Date.now().toString(36), at: new Date().toISOString(), shooter: S.shooter, gun: S.gun,
-    delay: +T.delay.toFixed(2), par: S.par || null, acoustic: T.acoustic, sens: S.sens,
+    delay: +T.delay.toFixed(2), acoustic: T.acoustic, sens: S.sens,
     shots: T.shots.map((s) => ({ t: +s.t.toFixed(4), db: +s.db.toFixed(1), removed: s.removed || undefined, gated: s.auto === 'quiet' || undefined })), gate: S.gate,
+    drillName: T.preset ? T.preset.name : undefined, rep: T.preset ? T.drillRes.length + 1 : undefined, par: presetPar() || null,
   };
   clipTag(rec);
   history.unshift(tagRecord(rec)); saveHistory(); T.saved = rec.id; renderSession();
-  $('btn-review').textContent = 'Saved ✓'; $('btn-review').disabled = true; renderHistory();
+  $('btn-review').textContent = 'Score…'; $('btn-review').disabled = false; renderHistory();
 }
 function updateSaved() {
   const r = history.find((h) => h.id === T.saved); if (!r) return;
@@ -897,7 +941,7 @@ function exportSession(id) {
 async function openSession(id) {
   const ses = sessions.find((x) => x.id === id); if (!ses) return;
   const recs = sessionRecs(id), d = new Date(ses.start), box = $('ses-detail');
-  $('ses-title').textContent = ses.name;
+  $('ses-title-h').textContent = ses.name;
   const mins = Math.round(((ses.end ? new Date(ses.end) : new Date()) - d) / 60000);
   const range = recs.filter((r) => r.mode !== 'dry'), dry = recs.filter((r) => r.mode === 'dry');
   const sums = range.map((r) => summarize(recShots(r))).filter((q) => q.count), best = (a) => (a.length ? Math.min(...a) : null);
@@ -951,30 +995,38 @@ function renderSession() {
   el.textContent = ses ? `● session · ${sessionRecs(ses.id).length} saved` : '';
 }
 // ---------- menus: Home → (Range | Dry fire → Trigger/Draw/Reload) → drill. Entering a drill starts a session; Back ends it.
-const DRILL_NAMES = { range: 'Range', trigger: 'Dry fire · Trigger', draw: 'Dry fire · Draw', reload: 'Dry fire · Reload' };
+const DRILL_NAMES = { range: 'Free shooting', trigger: 'Dry fire · Trigger', draw: 'Dry fire · Draw', reload: 'Dry fire · Reload' };
 let screen = 'home';
 function showScreen(v) {
   screen = v;
   document.querySelectorAll('.view').forEach((el) => el.classList.toggle('active', el.id === 'view-' + v));
-  const train = ['home', 'drymenu', 'timer'].includes(v);
+  const train = ['home', 'drymenu', 'range', 'editor', 'timer'].includes(v);
   if (v === 'home') clipReminder();
+  if (train) lastTrain = v;
+  if (window.UI) UI.onScreen(v);
   document.querySelectorAll('.tab').forEach((el) => el.classList.toggle('active', train ? el.dataset.view === 'train' : el.dataset.view === (v === 'session' ? 'history' : v)));
   if (v === 'history') renderHistory();
 }
 let lastTrain = 'home';
-function enterDrill(mode, drill) {
+// Enter the timer: free shooting (preset null), a drill from the Range screen, or a dry-fire drill.
+function enterDrill(mode, drill, preset) {
   if (drill) S.dryDrill = drill;
+  T.preset = mode === 'range' && preset ? preset : null; T.drillRes = [];
   setMode(mode); saveSettings();
-  $('drill-title').textContent = DRILL_NAMES[mode === 'dry' ? S.dryDrill : 'range'];
-  if (!activeSession) startSession(DRILL_NAMES[mode === 'dry' ? S.dryDrill : 'range']);
-  renderSession(); lastTrain = 'timer'; showScreen('timer');
+  $('drill-title').textContent = T.preset ? T.preset.name : DRILL_NAMES[mode === 'dry' ? S.dryDrill : 'range'];
+  $('seg-rep').style.visibility = T.preset ? 'hidden' : 'visible';
+  $('p-plan').hidden = !T.preset; $('p-res').textContent = presetPar() > 0 ? `Par ${presetPar().toFixed(2)} s` : '';
+  if (!activeSession) startSession(mode === 'dry' ? 'Dry fire' : 'Range');
+  window.UI && (UI.renderPlan(), UI.gauge(0), UI.parMark(presetPar() || null));
+  renderSession(); renderChips(); showScreen('timer');
 }
+// Back from the timer: the session keeps going (one session per trip); only End on the Range / Dry fire screen ends it.
 function leaveDrill() {
   if (T.learning) finishLearn();
-  if ((isDry() || T.seriesOn) && ['standby', 'live', 'reholster'].includes(T.state)) stopSeries();
+  if ((isDry() || T.seriesOn || T.preset) && ['standby', 'live', 'reholster'].includes(T.state)) stopSeries();
   else if (T.state === 'standby') cancel(); else if (T.state === 'live') stop();
-  const back = isDry() ? 'drymenu' : 'home';
-  const finish = () => { endSession(); lastTrain = back; showScreen(back); };
+  const back = isDry() ? 'drymenu' : 'range';
+  const finish = () => showScreen(back);
   if (film.on) { $('film-dlg').addEventListener('close', finish, { once: true }); stopFilm(); } else finish();
 }
 
@@ -988,6 +1040,7 @@ function pick(title, options, current, cb) {
   dlg.showModal();
 }
 function renderChips() { $('lbl-shooter').textContent = S.shooter || '—'; $('lbl-gun').textContent = S.gun || '—'; }
+const toast = (t) => { const h = $('toast-host'); if (!h) return; h.innerHTML = ''; const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; h.appendChild(d); clearTimeout(toast.t); toast.t = setTimeout(() => { h.innerHTML = ''; }, 1800); };
 
 // ---------- settings form ----------
 const NUMS = { 'set-gate': 'gate', 'set-rreset': 'rangeReset', 'set-rlto': 'reloadTimeout', 'set-dsens': 'drySens', 'set-rehol': 'dryReholster', 'set-rtime': 'dryTimeout', 'set-match': 'clickMatch', 'set-dmin': 'dmin', 'set-dmax': 'dmax', 'set-hz': 'hz', 'set-blen': 'blen', 'set-par': 'par', 'set-echo': 'echo', 'set-lock': 'lock', 'set-auto': 'auto', 'set-sens': 'sens' };
@@ -1042,7 +1095,7 @@ function setMode(m) {
   document.querySelectorAll('#seg-rep button').forEach((b) => b.classList.toggle('on', (b.dataset.rep === 'repeat') === repeatOn()));
   document.querySelectorAll('#seg-drill button').forEach((b) => b.classList.toggle('on', b.dataset.drill === S.dryDrill));
   document.body.classList.toggle('dry', m === 'dry');
-  $('btn-review').textContent = m === 'dry' ? 'Teach…' : 'Save'; $('btn-review').disabled = m !== 'dry';
+  $('btn-review').textContent = m === 'dry' ? 'Teach…' : 'Score…'; $('btn-review').disabled = m !== 'dry';
   const need = !S.clickTpl ? 'teach your trigger click first' : (S.dryDrill !== 'trigger' && !S.holTpl) ? 'teach your holster draw first' : '';
   setStatus(m === 'dry' ? (need ? `Dry fire · ${need}` : `Dry fire · ${{ trigger: 'trigger', draw: 'draw', reload: 'reload' }[S.dryDrill]} · ready`) : `Range · listening for gunshots${S.rangeRepeat ? ' · repeat' : ''}`); $('beepinfo').textContent = '';
   if (audio.node) audio.node.port.postMessage({ type: 'params', params: detParams() });
@@ -1050,7 +1103,7 @@ function setMode(m) {
 }
 function showView(v) {
   if (v === 'train') return showScreen(lastTrain);
-  if (['home', 'drymenu', 'timer', 'history', 'settings'].includes(v)) return showScreen(v);
+  if (['home', 'drymenu', 'range', 'editor', 'timer', 'history', 'settings'].includes(v)) return showScreen(v);
   document.querySelectorAll('.view').forEach((el) => el.classList.toggle('active', el.id === 'view-' + v));
   document.querySelectorAll('.tab').forEach((el) => el.classList.toggle('active', el.dataset.view === v));
   if (v === 'history') renderHistory();
@@ -1058,15 +1111,14 @@ function showView(v) {
 
 document.addEventListener('DOMContentLoaded', () => {
   $('btn-main').onclick = onMain;
-  $('btn-review').onclick = () => (isDry() ? teachMenu() : autoSaveIfNeeded());
+  $('btn-review').onclick = () => (isDry() ? teachMenu() : (autoSaveIfNeeded(), window.UI && UI.openScore()));
   document.querySelectorAll('#seg-drill button').forEach((b) => b.onclick = () => { if (['standby', 'live', 'reholster'].includes(T.state) || T.learning) return; S.dryDrill = b.dataset.drill; saveSettings(); setMode('dry'); });
   document.querySelectorAll('#seg-mode button').forEach((b) => b.onclick = () => setMode(b.dataset.mode));
   // Single/Repeat belongs to the CURRENT mode. (v0.6 switched to dry fire here, so Range + Repeat listened for clicks.)
   document.querySelectorAll('#seg-rep button').forEach((b) => b.onclick = () => { if (T.state === 'standby' || T.state === 'live' || T.state === 'reholster') return; const on = b.dataset.rep === 'repeat'; if (isDry()) S.dryRepeat = on; else S.rangeRepeat = on; saveSettings(); setMode(S.mode); });
   $('btn-export').onclick = exportCsv;
-  document.querySelectorAll('.menu-btn[data-go]').forEach((b) => b.onclick = () => { if (b.dataset.go === 'range') enterDrill('range'); else { lastTrain = 'drymenu'; showScreen('drymenu'); } });
-  document.querySelectorAll('.menu-btn[data-drill]').forEach((b) => b.onclick = () => enterDrill('dry', b.dataset.drill));
-  document.querySelectorAll('.back[data-back]').forEach((b) => b.onclick = () => { lastTrain = b.dataset.back; showScreen(b.dataset.back); });
+  document.querySelectorAll('[data-drill]').forEach((b) => b.onclick = () => enterDrill('dry', b.dataset.drill));
+  document.querySelectorAll('[data-back]').forEach((b) => b.onclick = () => showScreen(b.dataset.back));
   $('btn-back').onclick = leaveDrill;
   $('btn-ses-export').onclick = (e) => { e.preventDefault(); exportSession($('ses-dlg').dataset.id); };
   $('btn-ses-close').onclick = () => $('ses-dlg').close(); renderSession();
@@ -1079,8 +1131,10 @@ document.addEventListener('DOMContentLoaded', () => {
   $('chip-shooter').onclick = () => pick('Shooter', S.shooters, S.shooter, (v) => { S.shooter = v; saveSettings(); renderChips(); });
   $('chip-gun').onclick = () => pick('Gun', S.guns, S.gun, (v) => { S.gun = v; saveSettings(); renderChips(); });
   document.querySelectorAll('.tab').forEach((b) => b.onclick = () => showView(b.dataset.view));
-  // a session left open when the app was closed is closed now (its reps stay); empty ones are dropped
-  if (activeSession) { const ses = sessions.find((x) => x.id === activeSession); if (ses) { ses.end = ses.end || new Date().toISOString(); if (!sessionRecs(ses.id).length) sessions = sessions.filter((x) => x !== ses); } activeSession = null; saveSessions(); }
+  // one session per trip: a session survives the app being closed or reloaded at the range; one left open for more
+  // than 8 hours is closed now (its reps stay), and an empty one is dropped
+  if (activeSession) { const ses = sessions.find((x) => x.id === activeSession), last = ses ? Math.max(new Date(ses.start), ...sessionRecs(ses.id).map((r) => new Date(r.at))) : 0;
+    if (!ses || Date.now() - last > 8 * 3600e3) { if (ses) { ses.end = ses.end || new Date().toISOString(); if (!sessionRecs(ses.id).length) sessions = sessions.filter((x) => x !== ses); } activeSession = null; saveSessions(); } }
   bindSettings(); renderChips(); setMode(S.mode); renderHistory(); showScreen('home');
   document.addEventListener('visibilitychange', () => { if (!document.hidden && audio.ctx && audio.ctx.state !== 'running') audio.ctx.resume(); });
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
