@@ -94,3 +94,4 @@ body > .view.legacy .bar { all: unset; display: flex; gap: 8px; align-items: cen
 #app .hd-check .ic { width: 12px; height: 12px; stroke-width: 2.8; }
 #app #who-results small .ic { width: 11px; height: 11px; }
 #app .hs-month { margin: 6px 4px 0; }
+#app .h-mode svg { width: 26px; height: 26px; }
