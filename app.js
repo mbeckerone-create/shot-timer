@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.8.5';
+const BUILD = 'v0.8.6';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -718,16 +718,36 @@ function showFilmReady() {
 }
 // Camera roll: the share sheet's "Save Video" (video alone; with the log attached iOS doesn't offer it).
 // Files / Dropbox: video + log, keeping the clip's name.
+// One way into the share sheet for everything (clips, exports, backups). Returns 'ok' | 'cancel' | 'busy' | 'fail'.
+// iOS only opens the sheet straight from a tap: a second tap while it is opening, or a share started after waiting on
+// something, throws. Those used to fall through to a download link, which does nothing in a home-screen app: the
+// button seemed dead. Now a second tap is ignored and a failure says so; the download link is only for browsers with
+// no share sheet at all.
+let sharing = false;
+async function shareNow(files, title) {
+  if (sharing) return 'busy';
+  if (!navigator.share || !(navigator.canShare && navigator.canShare({ files }))) {
+    for (const f of files) { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; a.click(); }
+    return 'ok';
+  }
+  sharing = true;
+  try { await navigator.share(title ? { files, title } : { files }); return 'ok'; }
+  catch (e) { if (e.name === 'AbortError') return 'cancel'; console.warn('[shot-timer] share failed', e); toast('Could not open the share sheet. Tap again'); return 'fail'; }
+  finally { sharing = false; }
+}
 async function shareClip(r, withLog) {
-  if (!r) return;
+  if (!r) return 'fail';
   const files = [new File([r.video], `${r.name}.${r.ext}`, { type: r.type })];
   if (withLog) files.push(new File([JSON.stringify(r.log)], `${r.name}.json`, { type: 'application/json' }));
-  try {
-    if (navigator.canShare && navigator.canShare({ files })) { await navigator.share({ files, title: r.name }); r.saved = true; clipDB.put(r).catch(() => {}); return; }
-  } catch (e) { if (e.name === 'AbortError') return; }
-  for (const f of files) { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; a.click(); }
+  const res = await shareNow(files, r.name);
+  if (res === 'ok') { r.saved = true; clipDB.put(r).catch(() => {}); clipReminder(); }
+  return res;
 }
-function shareFilm(withLog) { return shareClip(film.result, withLog); }
+// the clip-ready box closes itself once the clip is saved (it used to stay open until you tapped Later)
+async function shareFilm(withLog) {
+  const r = film.result; if (!r) { $('film-dlg').close(); return; }
+  if (await shareClip(r, withLog) === 'ok') { film.result = null; if ($('film-dlg').open) $('film-dlg').close(); toast(withLog ? 'Clip and log shared' : 'Clip saved'); }
+}
 
 function onWorklet(m) {
   if (film.on && (m.type === 'shot' || m.type === 'beep')) filmLog(m.type === 'beep' ? 'beep' : 'sound', m.type === 'beep' ? { frame: m.frame, acoustic: m.acoustic, expected: m.expected } : { frame: m.frame, t: film.log && film.log.recStartFrame != null ? +((m.frame - film.log.recStartFrame) / audio.sr).toFixed(4) : undefined, db: +m.peakDb.toFixed(1), hpf: m.hpFracDb != null ? +m.hpFracDb.toFixed(1) : undefined, bands: m.bands });
@@ -1058,10 +1078,7 @@ function csvOf(records) {
     r.cfg ? (r.mode === 'dry' ? r.cfg.drySens : r.cfg.sens) : '', r.cfg && r.mode === 'dry' ? r.cfg.clickMatch : '']));
   return rows.map((r) => r.map((v) => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v).join(',')).join('\n');
 }
-async function shareFiles(files) {
-  try { if (navigator.canShare && navigator.canShare({ files })) { await navigator.share({ files }); return; } } catch (e) { if (e.name === 'AbortError') return; }
-  for (const f of files) { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; a.click(); }
-}
+function shareFiles(files) { return shareNow(files); }
 function exportCsv() { shareFiles([new File([csvOf(history)], `shot-timer-all-${new Date().toISOString().slice(0, 10)}.csv`, { type: 'text/csv' })]); }
 
 // ---------- sessions: everything between Start and End is tagged, and exported on its own ----------
@@ -1106,10 +1123,10 @@ function sessionLine(ses) {
   return `${recs.length - dry} range strings · ${dry} dry reps${mins != null ? ` · ${mins} min` : ''}`;
 }
 function exportSession(id) {
-  const ses = sessions.find((x) => x.id === id); if (!ses) return;
+  const ses = sessions.find((x) => x.id === id); if (!ses) return Promise.resolve('fail');
   const recs = sessionRecs(id), base = `${sessionStem(ses)}-session`;
   const json = { kind: 'shot-timer-session', version: 1, build: BUILD, session: ses, records: recs };
-  shareFiles([new File([csvOf(recs)], base + '.csv', { type: 'text/csv' }), new File([JSON.stringify(json, null, 1)], base + '.json', { type: 'application/json' })]);
+  return shareFiles([new File([csvOf(recs)], base + '.csv', { type: 'text/csv' }), new File([JSON.stringify(json, null, 1)], base + '.json', { type: 'application/json' })]);
 }
 // Session detail: strings grouped by drill, shooter filter, tap a string for its splits.
 async function openSession(id) {
@@ -1171,7 +1188,7 @@ async function openSession(id) {
   if (kept.length) {
     const el = document.createElement('div'); el.className = 'hd-drill';
     el.innerHTML = `<div class="hd-dh"><b>Clips</b><i>kept on this phone</i><span class="hd-par">${kept.length}</span></div>` + kept.map((k) => `<div class="hd-clip"><span class="hd-cl">${IC.cam}</span><div><b>${esc(k.name.replace(/^.*-/, ''))}</b><i>${(k.video.size / 1048576).toFixed(0)} MB · ${k.saved ? 'saved' : 'not saved anywhere yet'}</i></div><button data-roll="${esc(k.name)}">Save</button><button data-delclip="${esc(k.name)}">Delete</button></div>`).join('');
-    el.querySelectorAll('[data-roll]').forEach((b) => b.onclick = async () => shareClip(await clipDB.get(b.dataset.roll), false).then(() => openSession(id)));
+    el.querySelectorAll('[data-roll]').forEach((b) => b.onclick = async () => { if (await shareClip(kept.find((k) => k.name === b.dataset.roll), false) === 'ok') openSession(id); });
     el.querySelectorAll('[data-delclip]').forEach((b) => b.onclick = async () => { if (confirm(`Delete ${b.dataset.delclip} from this phone? Only do this once it's saved somewhere.`)) { await clipDB.del(b.dataset.delclip); openSession(id); } });
     box.appendChild(el);
   }
@@ -1179,8 +1196,7 @@ async function openSession(id) {
   $('ses-clips').hidden = !kept.length;
   $('ses-clips').onclick = async () => {
     const files = kept.map((k) => new File([k.video], `${k.name}.${k.ext}`, { type: k.type }));
-    try { if (navigator.canShare && navigator.canShare({ files })) { await navigator.share({ files }); for (const k of kept) { k.saved = true; clipDB.put(k).catch(() => {}); } openSession(id); return; } } catch (e) { if (e.name === 'AbortError') return; }
-    for (const k of kept) await shareClip(k, false);
+    if (await shareNow(files) === 'ok') { for (const k of kept) { k.saved = true; clipDB.put(k).catch(() => {}); } clipReminder(); openSession(id); }
   };
   $('ses-del').onclick = () => deleteGroup(g);
   if (screen !== 'session') showScreen('session');
@@ -1340,7 +1356,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('[data-drill]').forEach((b) => b.onclick = () => enterDrill('dry', b.dataset.drill));
   document.querySelectorAll('[data-back]').forEach((b) => b.onclick = () => showScreen(b.dataset.back));
   $('btn-back').onclick = leaveDrill;
-  $('btn-ses-export').onclick = (e) => { e.preventDefault(); exportSession($('ses-dlg').dataset.id); };
+  $('btn-ses-export').onclick = async (e) => { e.preventDefault(); if (await exportSession($('ses-dlg').dataset.id) === 'ok') { $('ses-dlg').close(); toast('Session exported'); } };
   $('btn-ses-close').onclick = () => $('ses-dlg').close(); renderSession();
   $('chip-film').onclick = toggleFilm;
   $('btn-train').onclick = startTrain; $('btn-train-stop').onclick = stopTrain;
