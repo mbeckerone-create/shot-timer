@@ -2,18 +2,21 @@
  * Same algorithm as analysis/detect2.py (reference). Feed raw mono samples in any chunk size;
  * shots are reported with a sample-accurate frame index on the input stream.
  *
- * Per 1 ms block: energy of a 2 kHz high-pass (rejects wind/handling rumble) and full-band energy.
+ * Per 1 ms block: energy of a 2 kHz high-pass (rejects wind/handling rumble) and of a 500 Hz high-pass (reference).
  * A block arms when HP energy exceeds the adaptive floor by armDb. Over the next confirmMs the
- * loudest block is found; it is a shot if it is louder than shotDb AND mostly high-frequency
- * (hpFracDb). The onset is backtracked from that peak to where the burst began, so a bullet crack
+ * loudest block is found (the window is extended while that block sits at its edge, i.e. the sound is still rising);
+ * it is a shot if it is louder than shotDb AND mostly high-frequency (hpFracDb, 2 kHz vs 500 Hz energy).
+ * The onset is backtracked from that peak to where the burst began, so a bullet crack
  * or tiny precursor still times the shot from its very first sound. After a shot the detector is
  * locked for lockMs, and anything within echoMs that is echoDb quieter than the shot is an echo (or within echoLongMs and
- * echoLongDb quieter: outdoor echoes off berms arrive up to ~1.2 s later).
+ * echoLongDb quieter: outdoor echoes off berms arrive up to ~1.2 s later). An echo or a tone (beep, steel ring) locks
+ * only for echoLockMs, so a fast follow-up shot right behind it is still heard.
+ * Scored on the Nov 24 2026 range films with tools/eval_clips.js (58 shots, steel at ~20 yd, wind).
  */
 (function (root) {
   const DEFAULTS = {
-    hpHz: 2000, armDb: 15, shotDb: -26, hpFracDb: -9, confirmMs: 70, lockMs: 100,
-    notchHz: null, floorMs: 300, echoMs: 180, echoDb: 6, echoLongMs: 1200, echoLongDb: 10, backMs: 60, backDb: 20, tonal: 0.6, tonalGapMs: 60,
+    hpHz: 2000, refHz: 500, armDb: 15, shotDb: -26, hpFracDb: -9, confirmMs: 70, lockMs: 100,
+    notchHz: null, floorMs: 300, peakMs: 20, echoLockMs: 20, echoMs: 180, echoDb: 6, echoLongMs: 1200, echoLongDb: 10, backMs: 60, backDb: 20, tonal: 0.6, tonalGapMs: 60,
   };
   const RING = 4096;            // blocks of history (~4 s)
   const SRING = 1 << 15;        // samples of HP history (~0.68 s @48k)
@@ -37,7 +40,7 @@
     constructor(sampleRate, params = {}) {
       this.sr = sampleRate; this.p = Object.assign({}, DEFAULTS, params);
       this.B = Math.max(1, Math.round(sampleRate / 1000));
-      this._biquad(this.p.hpHz); this._notch(this.p.notchHz);
+      this._biquad(this.p.hpHz); this._ref(this.p.refHz); this._notch(this.p.notchHz);
       this.x1 = this.x2 = this.y1 = this.y2 = 0;
       this.dh = new Float64Array(RING); this.eh = new Float64Array(RING); this.ef = new Float64Array(RING);
       this.hp = new Float32Array(SRING); this.raw = new Float32Array(SRING);   // raw kept for dry-fire fingerprints
@@ -49,7 +52,12 @@
       this.onShot = null; this.onLevel = null;
       this.peakSinceReport = -120;
     }
-    setParams(p) { Object.assign(this.p, p); if (p.hpHz) this._biquad(p.hpHz); if ('notchHz' in p) this._notch(p.notchHz); }
+    setParams(p) { Object.assign(this.p, p); if (p.hpHz) this._biquad(p.hpHz); if ('refHz' in p) this._ref(p.refHz); if ('notchHz' in p) this._notch(p.notchHz); }
+    _ref(fc) {      // reference high-pass for hpFracDb (0/null = full band, the old behaviour)
+      if (!fc) { this.rf = { b0: 1, b1: 0, b2: 0, a1: 0, a2: 0, x1: 0, x2: 0, y1: 0, y2: 0 }; return; }
+      const w0 = 2 * Math.PI * fc / this.sr, a = Math.sin(w0) / (2 * Math.SQRT1_2), c = Math.cos(w0), a0 = 1 + a;
+      this.rf = { b0: (1 + c) / 2 / a0, b1: -(1 + c) / a0, b2: (1 + c) / 2 / a0, a1: -2 * c / a0, a2: (1 - a) / a0, x1: 0, x2: 0, y1: 0, y2: 0 };
+    }
     // Narrow notch at our own beep pitch so the detector can keep listening WHILE the beep plays
     // (a reaction shot can land inside the beep). Off (null) by default.
     _notch(hz) {
@@ -72,11 +80,13 @@
         const x = buf[n];
         let y = this.b0 * x + this.b1 * this.x1 + this.b2 * this.x2 - this.a1 * this.y1 - this.a2 * this.y2;
         this.x2 = this.x1; this.x1 = x; this.y2 = this.y1; this.y1 = y;
+        // reference path for the 'mostly high-frequency' test: high-passed at refHz, so wind rumble and the low end of
+        // the muzzle blast (which an unclipped iPhone mic delivers in full) can't make a real shot look 'not high-frequency'
+        const r = this.rf; let xf = r.b0 * x + r.b1 * r.x1 + r.b2 * r.x2 - r.a1 * r.y1 - r.a2 * r.y2; r.x2 = r.x1; r.x1 = x; r.y2 = r.y1; r.y1 = xf;
         const nt = this.nt;
-        let xf = x;
         if (nt) {
           const z = nt.b0 * y + nt.b1 * nt.x1 + nt.b2 * nt.x2 - nt.a1 * nt.y1 - nt.a2 * nt.y2; nt.x2 = nt.x1; nt.x1 = y; nt.y2 = nt.y1; nt.y1 = z; y = z;
-          const q = this.ntf, zf = q.b0 * x + q.b1 * q.x1 + q.b2 * q.x2 - q.a1 * q.y1 - q.a2 * q.y2; q.x2 = q.x1; q.x1 = x; q.y2 = q.y1; q.y1 = zf; xf = zf;
+          const q = this.ntf, zf = q.b0 * xf + q.b1 * q.x1 + q.b2 * q.x2 - q.a1 * q.y1 - q.a2 * q.y2; q.x2 = q.x1; q.x1 = xf; q.y2 = q.y1; q.y1 = zf; xf = zf;
         }
         this.hp[this.frame & (SRING - 1)] = y; this.raw[this.frame & (SRING - 1)] = x; this.frame++;
         this.accH += y * y; this.accF += xf * xf;
@@ -128,11 +138,18 @@
         a.sort((u, v) => u - v); this.floor = a[a.length >> 1];
       }
       const alpha = 1 / p.floorMs, C = p.confirmMs;
-      while (this.i < this.nb - C - 3 - 90) {      // 90 ms extra look-ahead for the tone check
+      while (this.i < this.nb - C - 3 - 90 - 3 * p.peakMs) {      // 90 ms extra look-ahead for the tone check, 3×peakMs to finish a late burst
         const i = this.i, d = this._d(i);
         if (i >= this.lock && d > this.floor + p.armDb) {
           let pk = 0, pv = -1e9;
           for (let m = 0; m < C; m++) { const v = this._d(i + m); if (v > pv) { pv = v; pk = m; } }
+          // The floor stays put while the detector is armed, so on the tail of an earlier sound (or in wind) it re-arms
+          // every block and the window slides. A new shot can then enter only at the window's far edge, still rising:
+          // its peakDb was its first millisecond (Nov 24: shots at ~-3 dB logged at -32…-41, just over shotDb), and the
+          // gate and long-echo rule then threw it away. While the loudest block sits at the edge, extend the window.
+          for (let end = i + C; pk >= end - i - p.peakMs && end < i + C + 3 * p.peakMs; end += p.peakMs) {
+            for (let m = end; m < end + p.peakMs; m++) { const v = this._d(m); if (v > pv) { pv = v; pk = m - i; } }
+          }
           const j = i + pk;
           let sh = 0, sf = 0;
           for (let m = j - 2; m <= j + 2; m++) { sh += this.eh[m & (RING - 1)]; sf += this.ef[m & (RING - 1)]; }
@@ -147,7 +164,9 @@
             let pks = on, pa = 0; const n70 = Math.round(0.07 * this.sr);
             for (let s = on; s < on + n70; s++) { const a = Math.abs(this.hp[s & (SRING - 1)]); if (a > pa) { pa = a; pks = s; } }
             const g = Math.round(p.tonalGapMs * this.sr / 1000);
-            if (this._top3(pks) > p.tonal && (this._top3(pks + g) > p.tonal || this._top3(pks - g) > p.tonal)) continue;  // sustained tone = a beep
+            // sustained tone = a beep, or the ring of a steel plate (~2.3 kHz for 0.25 s). Not a shot, but don't hold the
+            // full lock either: the next shot can land inside it (Nov 24, clip 7 at +10 dB input).
+            if (this._top3(pks) > p.tonal && (this._top3(pks + g) > p.tonal || this._top3(pks - g) > p.tonal)) { this.lock = j + p.echoLockMs; this.i = this.lock; continue; }
             const last = this.shots[this.shots.length - 1];
             // Echo: close behind a shot and quieter. Outdoors (45 filmed clips) echoes off berms and hills arrive
             // 0.2-1.2 s after the shot, 10-25 dB down; your own follow-up shots are within a few dB of each other.
@@ -156,6 +175,10 @@
             if (!isEcho && !this._blanked(on)) {
               const shot = { frame: on, peakDb: pv, hpFracDb: hpf, bands: this._bands(on) };
               this.shots.push(shot); if (this.onShot) this.onShot(shot);
+            } else if (isEcho) {
+              // An echo must not hold the full lock: a fast follow-up shot (~0.3 s split) can land 100 ms after an echo
+              // of the first one (Nov 24, clip 3) and was then only seen on its tail and thrown away as an echo too.
+              this.lock = j + p.echoLockMs; this.i = this.lock;
             }
             continue;
           }
