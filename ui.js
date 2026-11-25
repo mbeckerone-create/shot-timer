@@ -114,7 +114,7 @@
     let left = heard ?? 0, html = '';
     p.steps.forEach((x, i) => {
       if (i) html += '<span class="st-arrow">→</span>';
-      if (x.reload) { html += '<span class="st-chip rl">⟲ reload</span>'; return; }
+      if (x.reload) { html += '<span class="st-chip rl"><span class="mi mi-reload" aria-hidden="true"></span> reload</span>'; return; }
       const on = Math.max(0, Math.min(x.n, left)); left -= x.n;
       const cur = now && on < x.n && !html.includes(' now') ? ' now' : '';
       html += `<span class="st-chip${cur}"><i class="tg">T${x.t}</i><span class="dots">${Array.from({ length: x.n }, (_, k) => `<i${k < on ? ' class="on"' : ''}></i>`).join('')}</span></span>`;
@@ -135,7 +135,7 @@
   const saveMine = () => saveJSON('st.drills', MINE);
   let selDrill = null, moreOpen = false;
   const runs = (pr) => history.filter((r) => r.drillName === pr.name).length;
-  const chev = () => el('span', 'hd-chev2', '›');
+  const chev = () => el('span', 'mi mi-chev hd-chev2');
   // a drill or free shooting starts the session if there isn't one yet (with the people picked on the card)
   function ensureSession() {
     if (activeSession) return;
@@ -160,7 +160,7 @@
     const favs = all.slice().sort((x, y) => runs(y) - runs(x)).slice(0, 3), rest = all.filter((pr) => !favs.includes(pr));
     favs.forEach((pr) => box.appendChild(hubRow(pr)));
     const tog = el('div', 'hd-row hd-more' + (moreOpen ? ' open' : '')); tog.setAttribute('role', 'button');
-    tog.append(el('span', 'hd-txt', `All drills (${rest.length})`), el('span', 'hd-chev', '⌄')); tog.onclick = () => { moreOpen = !moreOpen; renderHubDrills(); };
+    tog.append(el('span', 'hd-txt', `All drills (${rest.length})`), el('span', 'mi mi-down hd-chev')); tog.onclick = () => { moreOpen = !moreOpen; renderHubDrills(); };
     box.appendChild(tog);
     if (moreOpen) rest.forEach((pr) => { const r = hubRow(pr); r.classList.add('hd-sub'); box.appendChild(r); });
   }
@@ -184,12 +184,25 @@
     $('dry-sbar').querySelector('.dot').style.opacity = on ? 1 : .3;
   }
   // End is one tap from Shoot: ask first
-  const endAsk = () => { const ses = sessions.find((x) => x.id === activeSession); return !ses || !sessionRecs(ses.id).length || confirm(`End this session? ${sessionSummary()}.`); };
+  // End: a sheet with the session's bests. 'End and export' starts the share straight from the tap (iOS needs that).
+  function askEnd() {
+    const ses = sessions.find((x) => x.id === activeSession); if (!ses) return;
+    const done = () => { resetWho(); renderHub(); };
+    if (!sessionRecs(ses.id).length) { endSession(true); done(); return; }       // nothing shot: just end it
+    const who = [...new Set(sessionRecs(ses.id).map((r) => r.shooter))].map(initials).join(', ');
+    $('end-sum').textContent = `${sessionSummary()}${who ? ' · ' + who : ''}`;
+    const L = $('end-list'); L.innerHTML = '';
+    (window.RUNS ? RUNS.sessionGroups(ses.id) : []).slice(0, 4).forEach((g) => { const r = el('div', 'sheet-row'); r.append(el('span', null, g.name), el('i', null, g.best)); L.appendChild(r); });
+    const D = $('end-sheet');
+    $('btn-end-export').onclick = (e) => { e.preventDefault(); const id = ses.id; endSession(true); D.close(); done(); exportSession(id).then((r) => r === 'ok' && toast('Session exported')); };
+    $('btn-end-only').onclick = (e) => { e.preventDefault(); endSession(true); D.close(); done(); toast('Session ended'); };
+    D.showModal();
+  }
   $('ses-btn').onclick = () => {
-    if (activeSession) { if (!endAsk()) return; endSession(); resetWho(); renderHub(); return; }
+    if (activeSession) { askEnd(); return; }
     ensureSession(); toast('Session started'); renderHub();
   };
-  $('dry-end').onclick = () => { if (!endAsk()) return; endSession(); resetWho(); renderHub(); };
+  $('dry-end').onclick = askEnd;
   $('hub-new').onclick = () => openEditor(null);
 
   // ---------- drill editor: describe it (voice or typing), then the fields ----------
@@ -215,7 +228,7 @@
     ed.targets.forEach((t) => {
       const r = el('div', 'ed-row'), lab = el('span', 'grow'); lab.innerHTML = `<i class="tg">T${t.id}</i>&nbsp; Target ${t.id}`;
       r.append(lab, stepper(t.dist, 'yd', (d) => { t.dist = Math.max(1, Math.min(100, t.dist + d)); renderEditor(); }));
-      const x = el('button', 'ed-x', '×'); x.setAttribute('aria-label', `Remove target ${t.id}`); x.style.visibility = ed.targets.length < 2 ? 'hidden' : '';
+      const x = el('button', 'ed-x'); x.innerHTML = '<span class="mi mi-x" aria-hidden="true"></span>'; x.setAttribute('aria-label', `Remove target ${t.id}`); x.style.visibility = ed.targets.length < 2 ? 'hidden' : '';
       x.onclick = () => { ed.targets = ed.targets.filter((q) => q !== t); ed.steps.forEach((q) => { if (q.t === t.id) q.t = ed.targets[0].id; }); renderEditor(); };
       r.appendChild(x); T2.appendChild(r);
     });
@@ -228,14 +241,14 @@
     ed.steps.forEach((x, i) => {
       if (!x.reload && lastT && x.t !== lastT) S2.appendChild(el('div', 'ed-row ed-tr', `↳ transition to T${x.t}`));
       const r = el('div', 'ed-row'); r.appendChild(el('span', 'n', String(++n)));
-      if (x.reload) r.appendChild(el('span', 'grow', '⟲ Reload'));
+      if (x.reload) { const g = el('span', 'grow'); g.innerHTML = '<span class="mi mi-reload" aria-hidden="true"></span>' + ' Reload'; r.appendChild(g); }
       else {
         r.appendChild(stepper(x.n, '', (d) => { x.n = Math.max(1, Math.min(12, x.n + d)); renderEditor(); }));
         r.appendChild(el('span', 'grow', 'on'));
         const g = el('div', 'ed-tgs'); ed.targets.forEach((t) => { const b = el('button', t.id === x.t ? 'on' : null, 'T' + t.id); b.onclick = () => { x.t = t.id; renderEditor(); }; g.appendChild(b); }); r.appendChild(g);
         lastT = x.t;
       }
-      const del = el('button', 'ed-x', '×'); del.setAttribute('aria-label', 'Remove step'); del.style.visibility = ed.steps.filter((q) => !q.reload).length < 2 && !x.reload ? 'hidden' : '';
+      const del = el('button', 'ed-x'); del.innerHTML = '<span class="mi mi-x" aria-hidden="true"></span>'; del.setAttribute('aria-label', 'Remove step'); del.style.visibility = ed.steps.filter((q) => !q.reload).length < 2 && !x.reload ? 'hidden' : '';
       del.onclick = () => { ed.steps.splice(i, 1); renderEditor(); }; r.appendChild(del); S2.appendChild(r);
     });
   }
@@ -267,7 +280,6 @@
     $('vb-heard').innerHTML = heard.length ? 'Heard: ' + heard.map((h) => `<b>${esc(h)}</b>`).join(' · ') : 'Didn’t catch a drill in that. Try “2 shots on target 1, 5 reps under 4 seconds”.';
     renderEditor(); if (heard.length) setTimeout(toDetail, 450);
   }
-  $('eh-edit').onclick = toDetail;
   $('vb-text').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('vb-text').blur(); buildFromVoice(); } });
   micInto($('vb-mic'), $('vb-text'), buildFromVoice);
   $('p-f-name').addEventListener('input', renderEditor);
@@ -367,7 +379,7 @@
     else { const e = byDay[hsel], when = new Date(hsel).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
       $('h-day').textContent = e ? `${when} · ${e.k === 2 ? 'Range' : 'Dry fire'} · ${e.n} ${e.n === 1 ? 'string' : 'strings/reps'}${e.best != null ? ` · best ${e.best.toFixed(2)}` : ''}` : `${when} · rest day`; }
     const car = $('h-car'); car.innerHTML = '';
-    [...MINE, ...STD].forEach((pr) => { const c = el('button', 'h-card'); c.appendChild(el('b', null, pr.name)); c.onclick = () => shoot(pr); car.appendChild(c); });
+    [...MINE, ...STD].forEach((pr) => { const c = el('button', 'h-card'); c.append(el('b', null, pr.name), el('small', null, `${pr.shots} shot${pr.shots === 1 ? '' : 's'} · par ${pr.par.toFixed(2)}`)); c.onclick = () => shoot(pr); car.appendChild(c); });
     const live = history.filter((r) => r.mode !== 'dry' && recShots(r).length).map((r) => ({ t: recShots(r)[0], at: r.at }));
     const best = live.sort((a, b) => a.t - b.t)[0];
     $('h-prtxt').textContent = best ? `${best.t.toFixed(3)} s` : 'Shoot a string to set one';

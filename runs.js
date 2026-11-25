@@ -12,6 +12,7 @@
   const TG = ['var(--p-text)', 'var(--p-dry)', '#e3b58f', '#a9d5a0', '#d7a6e0', '#e8d88a', '#8fd3d9', '#f0a3a3'];
   const tgColor = (t) => TG[(Math.max(1, +t || 1) - 1) % TG.length];
   const MINUS = '−';
+  const chev = () => el('span', 'mi mi-chev hd-chev2');
 
   // ---------- records ----------
   const keyOf = (r) => (r.mode === 'dry' ? 'dry:' + (r.drill || 'trigger') : r.drillName || 'Free shooting');
@@ -139,7 +140,7 @@
       }
       const row = el('button', 'hl-row'), tt = el('span', 'hl-t'); tt.append(el('b', null, nameOf(k)), el('i', null, sub));
       const bv = el('span', 'hl-b'); bv.append(el('b', null, isFinite(best) ? f2(best) : '—'), el('i', null, bl));
-      row.append(tt, bv, el('span', 'hd-chev2', '›')); row.onclick = () => openRuns(k, 'range', activeSession); box.appendChild(row);
+      row.append(tt, bv, chev()); row.onclick = () => openRuns(k, 'range', activeSession); box.appendChild(row);
     }
   }
 
@@ -153,7 +154,7 @@
   function renderRuns() {
     const all = groupRecs(rv.sid, rv.key); if (!all.length) { showScreen(rv.back); return; }
     const free = isFree(rv.key), dry = rv.key.startsWith('dry:'), r0 = all.find((r) => r.targets) || all[0];
-    $('runs-back').textContent = rv.back === 'timer' ? '‹ Timer' : '‹ Range';
+    $('runs-back').textContent = rv.back === 'timer' ? 'Timer' : 'Range';
     $('runs-title').textContent = nameOf(rv.key);
     const tg = r0.targets ? r0.targets.map((t) => `T${t.id} ${t.dist} yd`).join(', ') : '';
     const st = r0.steps ? r0.steps.map((x) => (x.reload ? 'reload' : x.n)).join(' + ') + ' shots' : '';
@@ -187,7 +188,7 @@
       if (isBest && recs.length > 1) dots.appendChild(el('em', 'best', 'Best'));
       if (inc) dots.appendChild(el('em', 'inc', `Incomplete ${t.length} / ${need}`));
       const val = el('b', 'rv-v' + (isBest && recs.length > 1 ? ' hi' : '') + (inc ? ' mu' : ''), inc ? '—' : f2(v));
-      row.append(lab, dots, val, el('span', 'hd-chev2', '›')); row.onclick = () => openRun(r.id, 'runs'); L.appendChild(row);
+      row.append(lab, dots, val, chev()); row.onclick = () => openRun(r.id, 'runs'); L.appendChild(row);
     }
     $('runs-note').textContent = free ? 'Dots are shots. Tap a string for its splits.'
       : r0.targets && r0.targets.length > 1 ? `Dots are shots: ${r0.targets.slice(0, 3).map((x, i) => `${['white', 'blue', 'tan'][i]} on T${x.id}`).join(', ')}; hollow = not heard. An incomplete rep never counts as under par or as a best.`
@@ -206,7 +207,7 @@
   function renderRun() {
     const r = history.find((h) => h.id === rn.id); if (!r) { showScreen(rn.back === 'timer' ? 'timer' : 'runs'); return false; }
     const key = keyOf(r), free = isFree(key), t = live(r), need = r.drillShots || 0, inc = r.mode !== 'dry' && need && t.length < need, tot = total(r);
-    $('run-back').textContent = rn.back === 'timer' ? '‹ Timer' : `‹ ${nameOf(key)}`;
+    $('run-back').textContent = rn.back === 'timer' ? 'Timer' : nameOf(key);
     $('run-title').textContent = `${runLabel(r)} · ${ini(r.shooter)}`;
     $('run-sub').textContent = [tm(r.at), r.gun, r.clip ? `clip ${r.clip.replace(/^.*-clip/, '')} at ${Math.floor(r.clipT / 60)}:${String(Math.floor(r.clipT % 60)).padStart(2, '0')}` : ''].filter(Boolean).join(' · ');
     const pill = $('run-pill'); pill.className = 'rn-pill'; pill.hidden = !(inc || (r.par && t.length));
@@ -255,5 +256,15 @@
     $('clip-close').onclick = () => { v.pause(); v.removeAttribute('src'); v.load(); URL.revokeObjectURL(url); $('clipview').hidden = true; };
   }
 
-  window.RUNS = { showRunDone, hideRunDone, refresh, refreshNext, hubLog, openRuns, openRun };
+  // a session's drills, each with its best (for the End sheet)
+  function sessionGroups(sid) {
+    const order = [], by = {};
+    for (const r of history) { if (r.session !== sid) continue; const k = keyOf(r); if (!by[k]) { by[k] = []; order.push(k); } by[k].push(r); }
+    return order.map((k) => {
+      const recs = by[k];
+      if (isFree(k)) { const v = recs.map(first).filter((x) => x != null); return { name: nameOf(k), best: v.length ? `best first ${f2(Math.min(...v))}` : '' }; }
+      const v = recs.filter(counted).map(total).filter((x) => x != null); return { name: nameOf(k), best: v.length ? `best ${f2(Math.min(...v))}` : `${recs.length} rep${recs.length === 1 ? '' : 's'}` };
+    });
+  }
+  window.RUNS = { sessionGroups, showRunDone, hideRunDone, refresh, refreshNext, hubLog, openRuns, openRun };
 })();

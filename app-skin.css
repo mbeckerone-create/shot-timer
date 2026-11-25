@@ -250,3 +250,113 @@ body.training { overflow: hidden; }
 #clipview[hidden] { display: none; }
 #clipview video { width: 100%; max-height: 80vh; background: #000; }
 #clip-close { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 12px); right: 16px; min-height: 44px; padding: 0 18px; border: 0; border-radius: 999px; background: rgba(255,255,255,.16); color: #fff; font: 600 15px -apple-system, system-ui, sans-serif; }
+
+
+/* ---------- v0.8.7: UI fixes from the design page (boards 5–9) ---------- */
+/* line icons for the old text symbols (› ‹ ⌄ × ⟲ ↺) */
+.mi { display: inline-block; width: 1em; height: 1em; flex: none; vertical-align: -.14em; background: currentColor; -webkit-mask: var(--m) center / contain no-repeat; mask: var(--m) center / contain no-repeat; }
+.mi-chev { --m: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M9%206l6%206-6%206%22/%3E%3C/svg%3E"); }
+.mi-back { --m: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M15%205l-7%207%207%207%22/%3E%3C/svg%3E"); }
+.mi-down { --m: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M6%209l6%206%206-6%22/%3E%3C/svg%3E"); }
+.mi-x { --m: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M6.5%206.5l11%2011M17.5%206.5l-11%2011%22/%3E%3C/svg%3E"); }
+.mi-reload { --m: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M19.5%209A8%208%200%200%200%205%207.5M4.5%204v3.5H8M4.5%2015A8%208%200%200%200%2019%2016.5M19.5%2020v-3.5H16%22/%3E%3C/svg%3E"); }
+#app .p-back:not(.p-save) { display: inline-flex; align-items: center; gap: 2px; min-height: 34px; padding: 0 8px 0 0; font-size: 12.5px; font-weight: 500; }
+#app .p-back:not(.p-save)::before { content: ""; width: 17px; height: 17px; background: currentColor; -webkit-mask: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M15%205l-7%207%207%207%22/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M15%205l-7%207%207%207%22/%3E%3C/svg%3E") center / contain no-repeat; }
+#app .hd-chev2, #app .rd-chev { font-size: 15px; color: var(--p-muted); }
+#app .sb-go .mi { font-size: 13px; margin-left: 2px; }
+
+/* the page stays put: no rubber-band, the tab bar never floats */
+html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+body { position: fixed; inset: 0; }
+#app .view.scr, #app .ed-scroll, body > .view.legacy { overscroll-behavior: contain; }
+
+/* readable in sun: lighter grey, nothing under ~13 px on the phone */
+#app.proto[data-skin="softdark"] { --p-muted: #9a9da6; }
+html[data-skin="softdark"]:root { --muted: #9a9da6; }
+#app .p-chip i { font-size: 9.5px; letter-spacing: 0; text-transform: none; }
+#app .p-stats i { font-size: 9px; letter-spacing: 0; text-transform: none; }
+#app .p-status { font-size: 10px; }
+#app .p-hint { font-size: 10px; }
+#app .shotlist li.head { font-size: 9px; }
+
+/* tab bar: icons, 52 pt targets */
+#app .tabs .tab { min-height: 42px; font-size: 10px; gap: 2px; padding-top: 5px; }
+#app .tabs .ti { display: block; width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+#app.proto[data-skin="softdark"] .tabs .tab.active { color: var(--p-text); }
+
+/* tap targets: 44 pt and up */
+#app .p-step button { width: 34px; height: 34px; border-radius: 9px; font-size: 16px; color: var(--p-text); }
+#app .ed-x { width: 34px; height: 34px; font-size: 15px; display: grid; place-items: center; }
+#app .p-seg button { min-height: 30px; font-size: 10.5px; }
+#app .p-chip { min-height: 40px; }
+#app .shotlist .x { width: 34px; height: 30px; display: grid; place-items: center; font-size: 14px; }
+#app .shotlist li { grid-template-columns: 22px 1fr minmax(0, 1.4fr) 34px; }
+#app .p-ctrl .p-btn { min-height: 49px; font-size: 15px; border-radius: 15px; }
+#app .p-ctrl .p-btn2 { min-height: 49px; font-size: 12px; border-radius: 15px; padding: 0 15px; }
+#app .p-save { min-height: 31px; padding: 0 14px !important; border-radius: 999px; background: var(--p-accent) !important; color: var(--p-accent-ink) !important; font-size: 11.5px; }
+
+/* 5 · timer: back + single/repeat on one row, the full drill title under it */
+#app #view-timer .p-head { justify-content: space-between; }
+#app #view-timer .p-head .p-seg { width: 130px; }
+#app .tm-title { display: flex; flex-direction: column; gap: 1px; margin-top: -4px; }
+#app .tm-title b { font-size: 18px; font-weight: 600; line-height: 1.2; }
+#app .tm-title i { font-style: normal; font-size: 10.5px; color: var(--p-muted); }
+body.filming #app .tm-title { background: rgba(10,12,15,.55); color: #fff; border-radius: 12px; padding: 4px 8px; }
+/* toasts at the top, so they never cover START */
+.toast-host { top: calc(env(safe-area-inset-top, 0px) + 10px); bottom: auto; }
+.toast-host .toast { background: #f4f4f5; color: #0e0f11; border-radius: 999px; padding: 11px 18px; font-size: 15px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+html[data-skin="soft"] .toast-host .toast { background: #1b1d21; color: #fff; }
+
+/* 6 · home: carousel lines up with the cards; the clip reminder is a calm row */
+#app .h-carousel { margin: 0 -11px 0 0; padding: 0 11px 2px 0; scroll-padding-left: 0; }
+#app .h-card { flex: 0 0 114px; min-height: 58px; justify-content: space-between; }
+#app .h-card b { font-size: 12.5px; } #app .h-card small { font-size: 10px; }
+#app .clip-note { display: flex; align-items: center; gap: 10px; margin-top: 0; min-height: 46px; padding: 8px 12px; border: 0; border-radius: 13px; background: var(--p-panel); color: var(--p-text); font-size: 11.5px; text-align: left; }
+#app .clip-note[hidden] { display: none; }
+#app .clip-note > .ic { width: 17px; height: 17px; color: #ffc93c; flex: none; }
+#app .clip-note > span:not(.mi) { flex: 1; display: flex; flex-direction: column; }
+#app .clip-note b { font-weight: 500; } #app .clip-note i { font-style: normal; font-size: 10px; color: var(--p-muted); }
+#app .clip-note .mi { color: var(--p-muted); font-size: 15px; }
+
+/* 7 · edit drill: opens on the fields, voice is one line on top */
+#app .ed-hero { min-height: 0; padding: 0; gap: 4px; align-items: stretch; text-align: left; }
+#app .eh-field { max-width: none; border-radius: 13px; min-height: 43px; padding: 4px 4px 4px 12px; }
+#app .eh-field .vb-mic { width: 34px; height: 34px; }
+#app .eh-heard { max-width: none; min-height: 0; text-align: left; font-size: 10px; padding: 0 4px; }
+#app .eh-heard:empty { display: none; }
+
+/* 8 · settings: grouped cards like the rest of the app */
+body > #view-settings .form h2 { font-size: 13px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--muted); margin: 22px 4px 6px; }
+body > #view-settings .grp { background: var(--panel); border-radius: 16px; overflow: hidden; }
+body > #view-settings .grp .row { min-height: 52px; box-sizing: border-box; padding: 8px 14px; font-size: 16px; }
+body > #view-settings .grp .row:last-child { border-bottom: 0; }
+body > #view-settings .grp .row.col { padding: 12px 14px; gap: 8px; }
+body > #view-settings .form select { border: 0; background: transparent; color: var(--muted); text-align: right; text-align-last: right; font-size: 16px; padding: 8px 0; max-width: 60%; }
+body > #view-settings .form input[type=number] { border: 0; background: var(--panel2); border-radius: 10px; min-height: 40px; box-sizing: border-box; font-size: 16px; width: 84px; }
+body > #view-settings .row-pair { display: flex; align-items: center; gap: 6px; } body > #view-settings .row-pair i { font-style: normal; color: var(--muted); }
+body > #view-settings .row-pair input[type=number] { width: 64px; }
+body > #view-settings .form .hint { margin: 8px 4px 0; }
+body > #view-settings .form > .btn { display: flex; align-items: center; width: 100%; min-height: 52px; margin-top: 8px; border: 0; border-radius: 16px; background: var(--panel); color: var(--text); font-weight: 500; font-size: 16px; padding: 0 14px; text-align: left; }
+body > #view-settings .form > .btn.danger { color: var(--bad, #ff6b5e); }
+body > #view-settings .grp .btn { min-height: 44px; border: 0; background: var(--panel2); border-radius: 12px; font-weight: 600; }
+
+/* 9 · sheets: End session, clip ready, pickers rise from the bottom */
+dialog.sheet { margin: auto 0 0; width: 100%; max-width: 100%; max-height: 85vh; box-sizing: border-box; border-radius: 26px 26px 0 0; padding: 10px 18px calc(env(safe-area-inset-bottom, 0px) + 18px); }
+dialog.sheet::backdrop { background: rgba(0,0,0,.55); }
+dialog.sheet form { display: flex; flex-direction: column; gap: 10px; }
+dialog.sheet h3 { margin: 6px 0 0; font-size: 22px; font-weight: 600; }
+dialog.sheet .hint { font-size: 15px; margin: 0; line-height: 1.4; }
+dialog.sheet .btn { display: block; width: 100%; min-height: 52px; margin: 0; border: 0; border-radius: 16px; font-size: 16px; font-weight: 600; background: var(--panel2); color: var(--text); }
+dialog.sheet .btn.primary { background: var(--text); color: var(--bg); }
+dialog.sheet .btn.ghost { background: var(--panel2); }
+dialog.sheet .btn.bad { color: #ff6b5e; }
+dialog.sheet #picker-list { display: flex; flex-direction: column; gap: 8px; }
+.sheet-grip { align-self: center; width: 40px; height: 5px; border-radius: 3px; background: var(--panel2); }
+.sheet-list { background: var(--panel2); border-radius: 14px; } .sheet-list:empty { display: none; }
+.sheet-row { display: flex; justify-content: space-between; gap: 12px; min-height: 46px; align-items: center; padding: 0 14px; border-top: 1px solid var(--line); font-size: 15px; }
+.sheet-row:first-child { border-top: 0; } .sheet-row i { font-style: normal; color: var(--muted); }
+.sheet-two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+#app .ed-row .p-step { gap: 4px; } #app .ed-row .p-step b { min-width: 22px; }
+#app .ed-row .grow { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#app #ed-steps .ed-row > .grow:not(:has(.mi)) { display: none; }      /* "on": the T buttons say it */
+#app #ed-steps .ed-tgs { margin-left: auto; }

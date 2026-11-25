@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.8.6';
+const BUILD = 'v0.8.7';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -838,7 +838,7 @@ function onBeepDiag(m) {
 }
 function renderDiag() {
   const d = lastDiag, el = $('diag'); if (!el) return;
-  if (!d) { el.textContent = 'Run one string on the Timer tab, then come back here.'; return; }
+  if (!d) { el.textContent = 'Run one string, then come back here.'; return; }
   const f1 = (v, u = '') => (v == null || !isFinite(v)) ? 'n/a' : v.toFixed(1) + u;
   const yn = (v) => v === undefined ? '?' : String(v);
   const t = d.trk, r = d.reported;
@@ -937,7 +937,7 @@ function renderShots() {
     const split = !s.removed && prev != null ? s.t - prev : null;
     if (!s.removed) { n++; prev = s.t; }
     li.innerHTML = `<span class="n">${s.removed ? '' : n}</span><span class="t">${fmt(s.t)}</span><span class="sp">${s.removed ? (s.auto === 'quiet' ? 'quieter · not yours?' : s.auto === 'extra' ? 'after the last shot' : '') : (n === 1 ? 'draw' : fmt(split))}</span>`;
-    const x = document.createElement('button'); x.className = 'x'; x.textContent = s.removed ? '↺' : '×';
+    const x = document.createElement('button'); x.className = 'x'; x.innerHTML = `<span class="mi mi-${s.removed ? 'reload' : 'x'}" aria-hidden="true"></span>`;
     x.title = s.removed ? 'Restore shot' : 'Not a shot — remove';
     x.onclick = () => { s.removed = !s.removed; if (!s.removed) { s.keep = true; delete s.auto; } renderShots(); renderStats(); if (T.saved) updateSaved(); };
     li.appendChild(x); ol.prepend(li);
@@ -1088,12 +1088,12 @@ function startSession(auto) {
   const ses = { id: 's' + Date.now().toString(36), name, start: d.toISOString(), stem: uniqueStem(d), end: null, cfgStart: cfgSnap(), clips: [] };
   sessions.unshift(ses); activeSession = ses.id; saveSessions(); renderSession();
 }
-function endSession() {
+function endSession(quiet) {        // quiet: the End sheet already offered the export
   const ses = sessions.find((x) => x.id === activeSession); activeSession = null;
   if (ses) { ses.end = new Date().toISOString(); ses.cfgEnd = cfgSnap(); }
   if (ses && !sessionRecs(ses.id).length && !(ses.clips || []).length) sessions = sessions.filter((x) => x !== ses);   // nothing saved: drop it quietly
   saveSessions(); renderSession(); renderHistory();
-  if (ses && sessions.includes(ses)) { $('ses-dlg-info').textContent = `${ses.name}\n${sessionLine(ses)}`; $('ses-dlg').dataset.id = ses.id; $('ses-dlg').showModal(); }
+  if (!quiet && ses && sessions.includes(ses)) { $('ses-dlg-info').textContent = `${ses.name}\n${sessionLine(ses)}`; $('ses-dlg').dataset.id = ses.id; $('ses-dlg').showModal(); }
 }
 function closeSessionQuietly() {      // a session the app opened for itself (a train take): end it, no dialog
   const ses = sessions.find((x) => x.id === activeSession); activeSession = null;
@@ -1206,7 +1206,7 @@ async function clipReminder() {
   const el = $('clip-note'); if (!el) return;
   const list = (await clipDB.list().catch(() => [])).filter((c) => !c.saved);
   el.hidden = !list.length;
-  if (list.length) { el.textContent = `${list.length} clip${list.length > 1 ? 's' : ''} kept on this phone, not saved anywhere yet — tap to see`; el.onclick = () => (list[0].session && sessions.some((x) => x.id === list[0].session) ? openSession(list[0].session) : showScreen('history')); }
+  if (list.length) { el.innerHTML = `${IC.cam}<span><b>${list.length} clip${list.length > 1 ? 's' : ''} not saved yet</b><i>Kept on this phone · tap to save ${list.length > 1 ? 'them' : 'it'}</i></span><span class="mi mi-chev" aria-hidden="true"></span>`; el.onclick = () => (list[0].session && sessions.some((x) => x.id === list[0].session) ? openSession(list[0].session) : showScreen('history')); }
 }
 function renderSession() {
   const el = $('ses-text'); if (!el) return;
