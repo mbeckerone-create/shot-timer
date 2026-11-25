@@ -1,13 +1,14 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.8.2';
+const BUILD = 'v0.8.3';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
 // ---------- settings & storage ----------
 const DEFAULT_SETTINGS = {
   dmin: 2, dmax: 5, hz: 2400, blen: 300, par: 0,
+  vol: 1, cueStandby: 'B', cueBeep: 'C', cueSet: 'C', cueDrill: 'A',   // sounds: picked on the Shot Timer sounds page
   sens: 5, echo: 180, lock: 100, auto: 4,
   audioMode: 'play-and-record', beepOut: 'webaudio',
   mode: 'range',                                   // 'range' (live fire) | 'dry' (dry fire draws)
@@ -23,6 +24,7 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
 };
 let S = Object.assign({}, DEFAULT_SETTINGS, store.get('st.settings', {}));
+if (!S.sounds082) { S.sounds082 = 1; S.vol = 1; S.cueStandby = 'B'; S.cueBeep = 'C'; S.cueSet = 'C'; S.cueDrill = 'A'; S.hz = 3000; S.blen = 250; }   // your picks from the sounds page, applied once
 if (!S.shooters.includes(S.shooter)) S.shooter = S.shooters[0] || '';
 if (!S.guns.includes(S.gun)) S.gun = S.guns[0] || '';
 // v0.2.2 changed the click fingerprint (32 full-band bands): older templates must be re-taught
@@ -172,10 +174,39 @@ function scheduleBeep(at, ms) {
   const c = audio.ctx, o = c.createOscillator(), g = c.createGain();
   o.type = 'sine'; o.frequency.value = S.hz;
   const d = ms / 1000;
-  g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(BEEP_GAIN, at + 0.003);
-  g.gain.setValueAtTime(BEEP_GAIN, at + d - 0.01); g.gain.linearRampToValueAtTime(0, at + d);
+  const bg = BEEP_GAIN * Math.max(0.1, Math.min(1, S.vol ?? 1));
+  g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(bg, at + 0.003);
+  g.gain.setValueAtTime(bg, at + d - 0.01); g.gain.linearRampToValueAtTime(0, at + d);
   o.connect(g); g.connect(audio.gain); o.start(at); o.stop(at + d + 0.02);
   return o;
+}
+
+// ---------- sound cues: standby before the beep, set done, drill done (options from the Shot Timer sounds page) ----------
+// each cue is a list of notes: [start s, freq Hz, length s, wave, gain]
+const CUES = {
+  standby: { A: ['Do-do', [[0, 880, .12, 'sine', .5], [.22, 880, .12, 'sine', .5]]], B: ['Low then high', [[0, 587, .14, 'sine', .5], [.22, 880, .16, 'sine', .5]]],
+    C: ['Tick-tick', [[0, 1500, .03, 'square', .25], [.18, 1500, .03, 'square', .25]]], D: ['Long low tone', [[0, 523, .5, 'triangle', .5]]], off: ['Off', []] },
+  beep: { A: ['2400 Hz · 0.30 s', 2400, 300], B: ['2400 Hz · 0.18 s', 2400, 180], C: ['3000 Hz · 0.25 s', 3000, 250], D: ['2000 Hz · 0.30 s', 2000, 300] },
+  set: { A: ['Do-do-do down', [[0, 1047, .1, 'sine', .5], [.14, 880, .1, 'sine', .5], [.28, 698, .16, 'sine', .5]]], B: ['Do-do up', [[0, 784, .12, 'sine', .5], [.16, 1047, .2, 'sine', .5]]],
+    C: ['Triple tap', [[0, 1175, .07, 'sine', .5], [.11, 1175, .07, 'sine', .5], [.22, 1175, .07, 'sine', .5]]], D: ['Chime', [[0, 1319, .6, 'bell', .45], [0, 1976, .45, 'bell', .2]]], off: ['Off', []] },
+  drill: { A: ['Rising four', [[0, 523, .12, 'sine', .5], [.14, 659, .12, 'sine', .5], [.28, 784, .12, 'sine', .5], [.42, 1047, .35, 'sine', .5]]], B: ['Double chime', [[0, 1319, .5, 'bell', .45], [.32, 1760, .7, 'bell', .45]]],
+    C: ['Long do-do', [[0, 880, .35, 'sine', .5], [.45, 880, .6, 'sine', .5]]], D: ['Down and hold', [[0, 1047, .12, 'sine', .5], [.16, 784, .12, 'sine', .5], [.32, 523, .6, 'sine', .5]]], off: ['Off', []] },
+};
+const CUE_KEY = { standby: 'cueStandby', set: 'cueSet', drill: 'cueDrill' };
+// plays a cue through the app's output; returns when it ends (audio clock), or `at` if there is nothing to play
+function playCue(kind, at) {
+  const c = audio.ctx; if (!c || !audio.gain) return at || 0;
+  const notes = ((CUES[kind] || {})[S[CUE_KEY[kind]]] || [, []])[1]; at = at ?? c.currentTime + 0.02; let end = at;
+  const v = Math.max(0.1, Math.min(1, S.vol ?? 1));
+  for (const [st, f, len, wave, gain] of notes) {
+    const o = c.createOscillator(), g = c.createGain(), t = at + st;
+    o.type = wave === 'bell' ? 'sine' : wave; o.frequency.value = f;
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(gain * v, t + 0.004);
+    if (wave === 'bell') g.gain.exponentialRampToValueAtTime(0.0008, t + len);
+    else { g.gain.setValueAtTime(gain * v, t + Math.max(0.005, len - 0.012)); g.gain.linearRampToValueAtTime(0, t + len); }
+    o.connect(g); g.connect(audio.gain); o.start(t); o.stop(t + len + 0.02); end = Math.max(end, t + len);
+  }
+  return end;
 }
 
 // ---------- timer state machine ----------
@@ -214,7 +245,8 @@ async function start() {
   T.shots = []; T.ignored = []; T.dryEvents = []; T.pending = []; T.beepFrame = null; T.saved = false; renderShots(); renderStats();
   const lo = Math.min(S.dmin, S.dmax), hi = Math.max(S.dmin, S.dmax);
   T.delay = lo + Math.random() * (hi - lo);
-  const beepAt = audio.ctx.currentTime + Math.max(0.15, T.delay);
+  const sbEnd = playCue('standby');                       // "get ready", then the random delay
+  const beepAt = Math.max(sbEnd + 0.4, audio.ctx.currentTime) + Math.max(0.15, T.delay);
   T.beepOut = 'webaudio'; T.genPeak = null; T.sessAtSchedule = sessType(); T.sessAtBeep = '';
   clearTimeout(T.elTimer);
   if (false) {   // audio-element beep removed: on iOS it could cut off the microphone
@@ -325,6 +357,7 @@ function stop() {
     T.drillRes.push({ v: n ? s0.total : null, ok: n > 0 && s0.total <= par, rec: T.saved });
     window.UI && UI.renderPlan();
     if (T.drillRes.length >= T.preset.reps) return drillDone();
+    playCue('set');
     T.state = 'reholster'; setMain('STOP', 'stop'); let left = T.preset.reset;
     const tickDown = () => { if (T.state !== 'reholster') return; if (left <= 0) return start();
       $('beepinfo').textContent = `Reset · rep ${T.drillRes.length + 1} in ${left} s`; left--; T.nextTimer = setTimeout(tickDown, 1000); };
@@ -332,7 +365,7 @@ function stop() {
   }
   window.UI && UI.nextShooter();
   if (T.seriesOn) {                                      // repeat strings: reset, then the next random beep
-    const s = summarize(liveShots()); T.series.push({ t: n ? s.total : null, n });
+    const s = summarize(liveShots()); T.series.push({ t: n ? s.total : null, n }); playCue('set');
     if (n) setStatus(`String ${T.series.length} · ${n} shot${n > 1 ? 's' : ''} · ${fmt(s.total)}`);
     T.state = 'reholster'; setMain('STOP', 'stop'); let left = S.rangeReset;
     const tickDown = () => { if (T.state !== 'reholster') return; if (left <= 0) return start();
@@ -430,7 +463,7 @@ function endRep(hit) {
   } else { setMain('START'); releaseWake(); }
 }
 function drillDone() {
-  T.seriesOn = false; T.state = 'done'; setMain('START'); releaseWake();
+  T.seriesOn = false; T.state = 'done'; setMain('START'); releaseWake(); playCue('drill');
   const rr = T.drillRes, ok = rr.filter((x) => x.ok).length, vs = rr.map((x) => x.v).filter((v) => v != null);
   setStatus(`${ok} of ${rr.length} under par`);
   if (vs.length) { $('big').textContent = fmt(Math.min(...vs)); $('p-res').textContent = `Best ${fmt(Math.min(...vs))} · avg ${fmt(vs.reduce((a, b) => a + b, 0) / vs.length)}`; $('p-res').className = 'p-res'; }
@@ -1114,6 +1147,20 @@ const toast = (t) => { const h = $('toast-host'); if (!h) return; h.innerHTML = 
 // ---------- settings form ----------
 const NUMS = { 'set-gate': 'gate', 'set-rreset': 'rangeReset', 'set-rlto': 'reloadTimeout', 'set-dsens': 'drySens', 'set-rehol': 'dryReholster', 'set-rtime': 'dryTimeout', 'set-match': 'clickMatch', 'set-dmin': 'dmin', 'set-dmax': 'dmax', 'set-hz': 'hz', 'set-blen': 'blen', 'set-par': 'par', 'set-echo': 'echo', 'set-lock': 'lock', 'set-auto': 'auto', 'set-sens': 'sens' };
 function bindSettings() {
+  for (const [kind, id] of [['standby', 'set-cue-standby'], ['beep', 'set-cue-beep'], ['set', 'set-cue-set'], ['drill', 'set-cue-drill']]) {
+    const el = $(id); if (!el) continue;
+    el.innerHTML = Object.entries(CUES[kind]).map(([k, v]) => `<option value="${k}">${k === 'off' ? 'Off' : `${k} · ${v[0]}`}</option>`).join('');
+    el.value = kind === 'beep' ? (S.cueBeep || 'C') : S[CUE_KEY[kind]];
+    el.onchange = async () => {
+      if (kind === 'beep') { const b = CUES.beep[el.value]; S.cueBeep = el.value; S.hz = b[1]; S.blen = b[2]; $('set-hz').value = S.hz; $('set-blen').value = S.blen; }
+      else S[CUE_KEY[kind]] = el.value;
+      saveSettings(); try { await ensureAudio(); } catch (e) { return; }
+      if (kind === 'beep') scheduleBeep(audio.ctx.currentTime + 0.05, S.blen); else playCue(kind);
+    };
+  }
+  { const v = $('set-vol'); if (v) { v.value = Math.round((S.vol ?? 1) * 100); $('lbl-vol').textContent = v.value + '%';
+    v.oninput = () => { S.vol = v.value / 100; $('lbl-vol').textContent = v.value + '%'; saveSettings(); };
+    v.onchange = async () => { try { await ensureAudio(); scheduleBeep(audio.ctx.currentTime + 0.05, S.blen); } catch (e) {} }; } }
   for (const [id, k] of Object.entries(NUMS)) {
     const el = $(id); el.value = S[k];
     el.addEventListener('input', () => {

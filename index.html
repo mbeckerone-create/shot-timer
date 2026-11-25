@@ -166,6 +166,14 @@
       <h2>Look</h2>
       <label class="row"><span>Style</span><select id="set-skin"><option value="softdark">Soft dark</option><option value="soft">Clean light</option><option value="current">Dark</option></select></label>
 
+      <h2>Sounds</h2>
+      <label class="row"><span>Volume <b id="lbl-vol"></b></span><input id="set-vol" type="range" min="10" max="100" step="5"></label>
+      <label class="row"><span>Standby (get ready)</span><select id="set-cue-standby"></select></label>
+      <label class="row"><span>Start beep</span><select id="set-cue-beep"></select></label>
+      <label class="row"><span>Set done</span><select id="set-cue-set"></select></label>
+      <label class="row"><span>Drill done</span><select id="set-cue-drill"></select></label>
+      <p class="hint">Changing one plays it. The start beep stays one high tone, because the app times your draw by hearing it.</p>
+
       <h2>Start beep</h2>
       <label class="row"><span>Random delay min (s)</span><input id="set-dmin" type="number" min="0" max="30" step="0.5"></label>
       <label class="row"><span>Random delay max (s)</span><input id="set-dmax" type="number" min="0" max="30" step="0.5"></label>
