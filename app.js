@@ -605,7 +605,11 @@ async function startFilm() {
     settings: { mode: S.mode, drill: S.dryDrill, sens: S.sens, drySens: S.drySens, clickMatch: S.clickMatch, beepHz: S.hz, beepMs: S.blen, camFacing: S.camFacing,
       clickTpl: S.clickTpl, clickInfo: S.clickInfo, holTpl: S.holTpl, holInfo: S.holInfo, shooter: S.shooter, gun: S.gun },
     session: activeSession, recStartCtx: null, events: [] };
-  film.rec.onstart = () => { film.log.recStartCtx = +audio.ctx.currentTime.toFixed(4); film.log.recStartWall = Date.now(); };
+  film.rec.onstart = () => {
+    film.log.recStartCtx = +audio.ctx.currentTime.toFixed(4); film.log.recStartWall = Date.now();
+    // input frame at the start of the video (±~30 ms: from the last level report), so every logged sound gets a clip time
+    const L = audio.lastLevel; if (L) film.log.recStartFrame = Math.round(L.frame + (audio.ctx.currentTime - L.ctx) * audio.sr);
+  };
   film.name = nextClipName(); film.log.clip = film.name;
   const ses = sessions.find((x) => x.id === activeSession); if (ses) { ses.clips.push({ name: film.name, start: new Date().toISOString() }); saveSessions(); }
   film.rec.start(1000); film.on = true; renderFilmChip(); camStatus($('status').textContent, '');
@@ -627,6 +631,40 @@ function stopFilm() {
   if (film.rec && film.rec.state !== 'inactive') { film.rec.onstop = done; film.rec.stop(); } else done();
 }
 function toggleFilm() { if (film.on) stopFilm(); else startFilm(); }
+
+// ---------- train take: film one long take while the Range detector just listens ----------
+// No beep, no timing, no strings: every sound the detector hears is logged with its clip time, level and fingerprint,
+// so the video and log become test data (tools/eval_train.js scores the detector against the clip's soundtrack).
+const train = { on: false, n: 0, top: -120, t0: 0, timer: 0 };
+async function startTrain() {
+  if (film.on || T.state === 'standby' || T.state === 'live' || T.learning) { setStatus('Stop the timer or film first', 'err'); return; }
+  await startFilm(); if (!film.on) return;
+  film.log.kind = 'shot-timer-train-take'; film.log.train = true;
+  audio.node.port.postMessage({ type: 'params', params: { shotDb: ShotDetector.sensitivityToDb(S.sens), echoMs: S.echo, lockMs: S.lock } });
+  audio.node.port.postMessage({ type: 'listen' });      // no beep window, no notch, nothing blanked
+  Object.assign(train, { on: true, n: 0, top: -120, t0: Date.now() });
+  const v = $('train-cam'); v.srcObject = film.cam; v.classList.toggle('mirror', S.camFacing === 'user'); v.play().catch(() => {});
+  $('train-list').innerHTML = ''; $('train-n').textContent = '0'; $('train').hidden = false; document.body.classList.add('training');
+  train.timer = setInterval(() => { const s = (Date.now() - train.t0) / 1000; $('train-time').textContent = `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`; }, 500);
+  requestWake();
+}
+function stopTrain() {
+  if (!train.on) return;
+  train.on = false; clearInterval(train.timer); releaseWake();
+  audio.node.port.postMessage({ type: 'disarm' }); audio.node.port.postMessage({ type: 'params', params: detParams() });
+  $('train').hidden = true; document.body.classList.remove('training'); $('train-cam').srcObject = null;
+  stopFilm();
+}
+function onTrainSound(m) {
+  const t = film.log && film.log.recStartFrame != null ? (m.frame - film.log.recStartFrame) / audio.sr : null;
+  train.top = Math.max(train.top, m.peakDb);
+  const quiet = S.gate > 0 && m.peakDb < train.top - S.gate;     // probably not your gun (same rule as the gate)
+  if (!quiet) train.n++;
+  $('train-n').textContent = String(train.n);
+  const li = document.createElement('li'); li.className = quiet ? 'quiet' : '';
+  li.innerHTML = `<b>${quiet ? '·' : train.n}</b><span>${t == null ? '' : `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`}</span><span>${m.peakDb.toFixed(0)} dB</span>`;
+  const list = $('train-list'); list.prepend(li); while (list.children.length > 6) list.lastChild.remove();
+}
 function renderFilmChip() { const c = $('chip-film'); if (c) { c.classList.toggle('rec', film.on); $('lbl-film').textContent = film.on ? '● REC' : 'Off'; } }
 function camStatus(txt, cls) { const o = $('cam-status'); if (o) { o.textContent = txt; o.className = 'cam-status' + (cls ? ' ' + cls : ''); } }
 function camEvent(txt, kind) {
@@ -654,8 +692,9 @@ async function shareClip(r, withLog) {
 function shareFilm(withLog) { return shareClip(film.result, withLog); }
 
 function onWorklet(m) {
-  if (film.on && (m.type === 'shot' || m.type === 'beep')) filmLog(m.type === 'beep' ? 'beep' : 'sound', m.type === 'beep' ? { frame: m.frame, acoustic: m.acoustic, expected: m.expected } : { frame: m.frame, db: +m.peakDb.toFixed(1), bands: m.bands });
-  if (m.type === 'level') { micHealth(m.db); return drawMeter(m.db); }
+  if (film.on && (m.type === 'shot' || m.type === 'beep')) filmLog(m.type === 'beep' ? 'beep' : 'sound', m.type === 'beep' ? { frame: m.frame, acoustic: m.acoustic, expected: m.expected } : { frame: m.frame, t: film.log && film.log.recStartFrame != null ? +((m.frame - film.log.recStartFrame) / audio.sr).toFixed(4) : undefined, db: +m.peakDb.toFixed(1), hpf: m.hpFracDb != null ? +m.hpFracDb.toFixed(1) : undefined, bands: m.bands });
+  if (m.type === 'level') { audio.lastLevel = { frame: m.frame, ctx: audio.ctx.currentTime }; micHealth(m.db); return drawMeter(m.db); }
+  if (train.on) { if (m.type === 'shot') onTrainSound(m); return; }
   if (m.type === 'beepdiag') return onBeepDiag(m);
   if (m.type === 'beep' && T.learning) { T.learning.beepFrame = m.frame; return; }
   if (m.type === 'beep' && (T.state === 'standby' || T.state === 'live') && T.beepFrame == null) {
@@ -1239,6 +1278,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-ses-export').onclick = (e) => { e.preventDefault(); exportSession($('ses-dlg').dataset.id); };
   $('btn-ses-close').onclick = () => $('ses-dlg').close(); renderSession();
   $('chip-film').onclick = toggleFilm;
+  $('btn-train').onclick = startTrain; $('btn-train-stop').onclick = stopTrain;
   $('btn-film-roll').onclick = (e) => { e.preventDefault(); shareFilm(false); };
   $('btn-film-share').onclick = (e) => { e.preventDefault(); shareFilm(true); };
   $('btn-film-close').onclick = () => { film.result = null; $('film-dlg').close(); };

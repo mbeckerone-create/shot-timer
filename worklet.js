@@ -7,7 +7,7 @@ class ShotTimerProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.det = new ShotDetector(sampleRate);
-    this.det.onShot = (s) => this.port.postMessage({ type: 'shot', frame: s.frame, peakDb: s.peakDb, bands: s.bands });
+    this.det.onShot = (s) => this.port.postMessage({ type: 'shot', frame: s.frame, peakDb: s.peakDb, hpFracDb: s.hpFracDb, bands: s.bands });
     this.beep = null; this.beepMeta = null; this.offset = null; this.q = 0; this.cap = null;
     this.port.onmessage = (e) => this.onMsg(e.data);
     this.port.postMessage({ type: 'ready', sampleRate });

@@ -20,6 +20,15 @@
 <div class="camwrap"><video id="cam" playsinline muted autoplay></video>
   <div class="cam-over"><div id="cam-status" class="cam-status"></div><div id="cam-events" class="cam-events"></div><div class="cam-rec">● REC</div></div></div>
 
+<!-- train take: full-screen camera, a shot counter and the last sounds heard; no timer -->
+<div id="train" hidden>
+  <video id="train-cam" playsinline muted autoplay></video>
+  <div class="train-top"><span class="train-rec">● TRAIN TAKE</span><span id="train-time">0:00</span></div>
+  <div class="train-count"><b id="train-n">0</b><span>shots heard</span></div>
+  <ol id="train-list"></ol>
+  <button id="btn-train-stop" class="train-stop" aria-label="Stop the take"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Stop</button>
+</div>
+
 <main id="app" class="phone proto" data-skin="soft">
 
   <!-- HOME -->
@@ -199,6 +208,8 @@
       <h2>Training film</h2>
       <label class="row"><span>Camera</span><select id="set-cam"><option value="user">Front (see the overlay)</option><option value="environment">Back (better video)</option></select></label>
       <p class="hint">Tap Film on the timer screen, run your drills, tap it again to stop. The clip is kept on this phone until you delete it.</p>
+      <button id="btn-train" class="btn small">Record a train take</button>
+      <p class="hint">One long take for tuning shot detection: no beep, no timing. Shoot as you like; every sound the detector hears is logged against the video. Save it with <b>Clip + log</b>. Video uses about 20 MB a minute.</p>
 
       <h2>Detection</h2>
       <label class="row col"><span>Sensitivity <b id="lbl-sens"></b></span><input id="set-sens" type="range" min="1" max="10" step="1"></label>
