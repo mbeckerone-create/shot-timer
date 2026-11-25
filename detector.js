@@ -213,7 +213,9 @@
       this.s1 = this.s2 = this.en = 0; this.n = 0; this.blockStart = 0;
       this.ring = new Float32Array(8192); this.best = { ratio: 0, toneDb: -120, frame: 0 }; this.bandDb = null;
     }
-    window(fromFrame, toFrame) { this.from = fromFrame; this.to = toFrame; this.found = null; this.run = 0; }
+    // a tone only counts if it STARTS inside the window (one quiet block first): opening the window mid-tone would
+    // time from the tail of a beep, or take a steel ring that began before it
+    window(fromFrame, toFrame) { this.from = fromFrame; this.to = toFrame; this.found = null; this.run = 0; this.sawQuiet = false; }
     process(buf, startFrame) {
       const [b0, b1, b2, a1, a2] = this.hb, N = this.N;
       for (let k = 0; k < buf.length; k++) {
@@ -237,7 +239,7 @@
           if (this.bandDb === null) this.bandDb = toneDb;
           const snr = toneDb - this.bandDb;                            // tone vs this band's own background
           if (inWin && toneDb > this.best.toneDb) this.best = { ratio, toneDb, snr, contrast, frame: this.blockStart };
-          if (this.found === null && inWin && snr > 15 && contrast > 10 && toneDb > -100) {
+          if (this.found === null && inWin && this.sawQuiet && snr > 15 && contrast > 10 && toneDb > -100) {
             if (this.run++ === 0) this.runStart = this.blockStart;
             if (this.run >= 3) {          // refine to the first sample of the tone (sample-accurate)
               let amp = 0; for (let q = f - N + 1; q <= f; q++) amp = Math.max(amp, Math.abs(this.bring[q & 8191]));
@@ -246,7 +248,7 @@
               this.found = on - this.bpDelay - Math.round(0.00075 * this.sr); this.foundDb = toneDb;
             }
           } else {
-            this.run = 0;
+            this.run = 0; if (inWin && !(snr > 15 && contrast > 10 && toneDb > -100)) this.sawQuiet = true;
             if (this.found === null) this.bandDb += 0.05 * (Math.min(toneDb, this.bandDb + 6) - this.bandDb);   // track band background
           }
           this.s1 = this.s2 = this.en = 0; this.n = 0;

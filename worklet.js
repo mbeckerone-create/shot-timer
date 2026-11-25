@@ -1,6 +1,7 @@
 /* AudioWorklet: runs ShotDetector + BeepFinder on the raw mic stream, sample-accurate.
  * Frames are counted on the INPUT stream, so beep and shots share one clock.
  * Around each start beep it also captures the raw mic audio and sends it back for diagnostics. */
+const WIN_BEFORE = 0.6;
 const WIN_AFTER = 1.5;   // search for the beep from START until 1.5 s after it was expected (iOS clock mapping can be off by ~1 s)
 const CAP_AFTER = 5.0, CAP_MAX = 16;              // diagnostic capture: from START press until 5 s after the expected beep
 class ShotTimerProcessor extends AudioWorkletProcessor {
@@ -24,7 +25,9 @@ class ShotTimerProcessor extends AudioWorkletProcessor {
       this.det.setBlank(ranges);
       this.det.setParams({ notchHz: m.beepHz });     // detector ignores our beep pitch, so it can hear shots during the beep
       this.beep = new ShotDetector.BeepFinder(sampleRate, m.beepHz);
-      this.beep.window(this.det.frame, exp + Math.round(WIN_AFTER * sampleRate));
+      // Only a tone near the expected beep counts: on Nov 24 the real beep landed 50–65 ms after the expected time, so
+      // from 0.6 s before it. Searching from START took a steel ring or another lane's timer during standby as the beep.
+      this.beep.window(Math.max(this.det.frame, exp - Math.round(WIN_BEFORE * sampleRate)), exp + Math.round(WIN_AFTER * sampleRate));
       this.beepMeta = { exp, len, pad, ranges, hz: m.beepHz, latency: m.latency };
       const c0 = this.det.frame, c1 = Math.min(exp + Math.round(CAP_AFTER * sampleRate), c0 + CAP_MAX * sampleRate);
       this.cap = { from: c0, buf: new Float32Array(Math.max(1, c1 - c0)), sent: false, found: null, acoustic: false };

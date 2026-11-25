@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.8.4';
+const BUILD = 'v0.8.5';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -21,7 +21,7 @@ const DEFAULT_SETTINGS = {
 };
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
-  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { if (!store.warned) { store.warned = 1; setTimeout(() => { try { toast('Could not save: phone storage is full. Back up in Settings › Data'); } catch {} }, 0); } } },
 };
 let S = Object.assign({}, DEFAULT_SETTINGS, store.get('st.settings', {}));
 if (!S.sounds082) { S.sounds082 = 1; S.vol = 1; S.cueStandby = 'B'; S.cueBeep = 'C'; S.cueSet = 'C'; S.cueDrill = 'A'; S.hz = 3000; S.blen = 250; }   // your picks from the sounds page, applied once
@@ -44,9 +44,13 @@ function tagRecord(r) { if (activeSession) { r.session = activeSession; r.cfg = 
 const isDry = () => S.mode === 'dry';
 const repeatOn = () => (isDry() ? S.dryRepeat : S.rangeRepeat);
 const drySensToDb = (s) => -30 - (s - 1) * 3;          // dry fire: 1:-30 dB … 7:-48 dB … 10:-57 dB (just above room noise)
+function rangeParams() { const m = S.mode; S.mode = 'range'; const p = detParams(); S.mode = m; return p; }
 function detParams() {
-  if (isDry()) return { shotDb: drySensToDb(S.drySens), echoMs: 0, lockMs: 60 };   // short lock: see both halves of a rack
-  return { shotDb: ShotDetector.sensitivityToDb(S.sens), echoMs: S.echo, lockMs: S.lock };
+  // Dry fire: short lock (see both halves of a rack), no echo rules (a click 10 dB under the holster snap was being
+  // dropped as a 1.2 s 'echo'), and the full-band shape test it was tuned with (the 500 Hz reference let thumps through).
+  if (isDry()) return { shotDb: drySensToDb(S.drySens), echoMs: 0, echoLongMs: 0, refHz: 0, lockMs: 60 };
+  const D = ShotDetector.DEFAULTS;
+  return { shotDb: ShotDetector.sensitivityToDb(S.sens), echoMs: S.echo, lockMs: S.lock, echoLongMs: D.echoLongMs, refHz: D.refHz };
 }
 // ---------- dry fire: trigger-click fingerprint ----------
 // Each detected sound carries 24 band energies (2–20 kHz). We compare its SHAPE (level removed) with the learned
@@ -95,7 +99,9 @@ function micHealth(db) {
   if (!deadSince) deadSince = performance.now();
   if (performance.now() - deadSince > 1500 && !audio.dead) {
     audio.dead = true; console.warn('[shot-timer] mic delivering silence — will reopen');
-    if (T.state === 'standby' || T.state === 'live') { cancel(); }
+    // a string with shots in it is ended and saved, not thrown away
+    if (T.state === 'live' && !isDry() && liveShots().length) { if (T.preset || T.seriesOn) stopSeries(); else stop(); }
+    else if (T.state === 'standby' || T.state === 'live') { if (T.preset || T.seriesOn || isDry()) stopSeries(); else cancel(); }
     setStatus('Mic stopped', 'err'); $('beepinfo').textContent = 'The microphone stopped. Tap START to reconnect it.';
   }
 }
@@ -219,6 +225,7 @@ const T = { preset: null, drillRes: [], series: [], seriesOn: false, nextTimer: 
 function presetPar() { return T.preset ? T.preset.par : S.par; }
 function drillStatus() { return T.preset ? `Rep ${Math.min(T.drillRes.length + 1, T.preset.reps)} of ${T.preset.reps}` : ''; }
 async function onMain() {
+  if (T.starting) return;
   if (T.learning) return finishLearn();
   if (T.preset) {
     if (T.state === 'idle' || T.state === 'done') { if (T.drillRes.length >= T.preset.reps) T.drillRes = []; T.seriesOn = true; T.series = []; window.UI && UI.renderPlan(); return start(); }
@@ -235,6 +242,11 @@ async function onMain() {
 }
 
 async function start() {
+  if (T.starting) return;                                  // a second tap while the mic opens would schedule a 2nd beep
+  T.starting = true;
+  try { await startNow(); } finally { T.starting = false; }
+}
+async function startNow() {
   try { await ensureAudio(); } catch (e) {
     setStatus('Mic blocked', 'err');
     $('beepinfo').textContent = 'Allow microphone access (Settings › Safari › Microphone), and open over https.';
@@ -242,6 +254,7 @@ async function start() {
   }
   if (audio.ctx.state !== 'running') await audio.ctx.resume();
   if (T.state === 'done' && T.shots.length && !T.saved) autoSaveIfNeeded();
+  clearTimeout(T.doneTimer); T.doneTimer = 0;
   T.shots = []; T.ignored = []; T.dryEvents = []; T.pending = []; T.beepFrame = null; T.saved = false; renderShots(); renderStats();
   const lo = Math.min(S.dmin, S.dmax), hi = Math.max(S.dmin, S.dmax);
   T.delay = lo + Math.random() * (hi - lo);
@@ -260,7 +273,7 @@ async function start() {
   $('p-res').textContent = par > 0 ? `Par ${par.toFixed(2)} s` : ''; $('p-res').className = 'p-res p-par';
   audio.node.port.postMessage({ type: 'params', params: detParams() });
   audio.node.port.postMessage({ type: 'arm', beepAt, parAt, beepMs: S.blen, beepHz: S.hz, latency: latencyEstimate() });
-  T.state = 'standby'; setStatus(T.preset ? `${drillStatus()} · standby` : T.seriesOn ? `${isDry() ? 'Rep' : 'String'} ${T.series.length + 1} · standby` : 'Standby', 'standby'); $('big').textContent = '0.000';
+  T.state = 'standby'; window.RUNS && RUNS.hideRunDone(); setStatus(T.preset ? `${drillStatus()} · standby` : T.seriesOn ? `${isDry() ? 'Rep' : 'String'} ${T.series.length + 1} · standby` : 'Standby', 'standby'); $('big').textContent = '0.000';
   window.UI && UI.renderPlan();
   $('beepinfo').textContent = '';
   setMain(T.seriesOn ? 'STOP' : 'CANCEL', 'standby'); if (!isDry()) $('btn-review').disabled = true;
@@ -318,9 +331,19 @@ function addShot(frame, db, bands) {
   if (T.preset) {
     const n = liveShots().length; window.UI && UI.renderPlan(n);
     setStatus(`Shot ${Math.min(n, T.preset.shots)} of ${T.preset.shots}`, 'live');
-    if (n >= T.preset.shots) { clearTimeout(T.doneTimer); T.doneTimer = setTimeout(() => { if (T.state === 'live') stop(); }, 700); }   // all shots in: end the string
+    // all shots in: end the string 0.7 s after the LAST one the drill calls for. Armed once: echoes and steel dings
+    // after it used to restart this timer and join the rep (clip 5 rep 1: 4 shots done at 2.50 s, saved as 9 at 4.62 s).
+    if (n >= T.preset.shots && !T.doneTimer) T.doneTimer = setTimeout(() => { T.doneTimer = 0; if (T.state === 'live') stop(); }, 700);
   }
 }
+// A drill rep keeps only the shots it calls for: later sounds are struck out as 'extra' (tap Keep to bring one back).
+function trimExtras() {
+  if (!T.preset) return; let k = 0;
+  for (const q of T.shots) { if (q.removed) continue; if (++k > T.preset.shots && !q.keep) { q.removed = true; q.auto = 'extra'; } }
+}
+// complete = every shot the drill calls for was heard. Records from before v0.8.5 don't say: treat them as complete.
+function recComplete(r) { return !r.drillShots || recShots(r).length >= r.drillShots; }
+function recUnderPar(r) { const t = recShots(r); return !!(r.par && t.length && recComplete(r) && t[t.length - 1] <= r.par); }
 
 // Own-gun gate: your gun is by far the loudest thing the phone hears (about -3 dB on the range clip of Nov 14);
 // other lanes and echoes were 11-40 dB quieter. Sounds more than S.gate dB below the loudest shot of the string are
@@ -347,20 +370,23 @@ function stop() {
   audio.node.port.postMessage({ type: 'disarm' });
   for (const o of T.oscs) { try { o.stop(); } catch {} }
   clearInterval(T.autoTimer); cancelAnimationFrame(T.raf);
-  const n = liveShots().length; clearTimeout(T.doneTimer);
-  T.state = 'done'; renderStats(); setStatus(n ? 'String done' : 'No shots heard');
+  clearTimeout(T.doneTimer); T.doneTimer = 0; trimExtras();
+  const n = liveShots().length, need = T.preset ? T.preset.shots : 0, inc = n > 0 && n < need;
+  T.state = 'done'; renderStats(); renderShots(); setStatus(!n ? 'No shots heard' : inc ? `Incomplete · ${n} of ${need} shots` : 'String done');
   setMain('START'); $('btn-review').disabled = !n; $('btn-review').textContent = 'Score…';
   autoSaveIfNeeded();
+  if (n) setTimeout(() => window.RUNS && RUNS.showRunDone(), 0);     // the result stays on screen until the next run
   const par = presetPar(), s0 = summarize(liveShots());
-  if (par > 0 && n) { const d = s0.total - par; $('p-res').innerHTML = d <= 0 ? `${IC.ok} ${Math.abs(d).toFixed(2)} under par ${par.toFixed(2)}` : `${IC.no} ${d.toFixed(2)} over par ${par.toFixed(2)}`; $('p-res').className = 'p-res' + (d > 0 ? ' over' : ''); }
+  if (inc) { $('p-res').textContent = `${n} of ${need} shots heard · not counted`; $('p-res').className = 'p-res over'; }
+  else if (par > 0 && n) { const d = s0.total - par; $('p-res').innerHTML = d <= 0 ? `${IC.ok} ${Math.abs(d).toFixed(2)} under par ${par.toFixed(2)}` : `${IC.no} ${d.toFixed(2)} over par ${par.toFixed(2)}`; $('p-res').className = 'p-res' + (d > 0 ? ' over' : ''); }
   if (T.preset) {                                        // a drill: record the rep, then reset or finish
-    T.drillRes.push({ v: n ? s0.total : null, ok: n > 0 && s0.total <= par, rec: T.saved });
+    T.drillRes.push({ v: n ? s0.total : null, ok: n > 0 && !inc && s0.total <= par, inc, rec: T.saved });
     window.UI && UI.renderPlan();
     if (T.drillRes.length >= T.preset.reps) return drillDone();
     playCue('set');
     T.state = 'reholster'; setMain('STOP', 'stop'); let left = T.preset.reset;
     const tickDown = () => { if (T.state !== 'reholster') return; if (left <= 0) return start();
-      $('beepinfo').textContent = `Reset · rep ${T.drillRes.length + 1} in ${left} s`; left--; T.nextTimer = setTimeout(tickDown, 1000); };
+      $('beepinfo').textContent = `Reset · rep ${T.drillRes.length + 1} in ${left} s`; T.resetLeft = left; window.RUNS && RUNS.refreshNext(left); left--; T.nextTimer = setTimeout(tickDown, 1000); };
     tickDown(); return;
   }
   window.UI && UI.nextShooter();
@@ -369,7 +395,7 @@ function stop() {
     if (n) setStatus(`String ${T.series.length} · ${n} shot${n > 1 ? 's' : ''} · ${fmt(s.total)}`);
     T.state = 'reholster'; setMain('STOP', 'stop'); let left = S.rangeReset;
     const tickDown = () => { if (T.state !== 'reholster') return; if (left <= 0) return start();
-      $('beepinfo').textContent = `Reset… next string in ${left} s`; left--; T.nextTimer = setTimeout(tickDown, 1000); };
+      $('beepinfo').textContent = `Reset… next string in ${left} s`; T.resetLeft = left; window.RUNS && RUNS.refreshNext(left); left--; T.nextTimer = setTimeout(tickDown, 1000); };
     tickDown(); return;
   }
   releaseWake();
@@ -464,19 +490,20 @@ function endRep(hit) {
 }
 function drillDone() {
   T.seriesOn = false; T.state = 'done'; setMain('START'); releaseWake(); playCue('drill');
-  const rr = T.drillRes, ok = rr.filter((x) => x.ok).length, vs = rr.map((x) => x.v).filter((v) => v != null);
-  setStatus(`${ok} of ${rr.length} under par`);
+  const rr = T.drillRes, ok = rr.filter((x) => x.ok).length, vs = rr.filter((x) => !x.inc).map((x) => x.v).filter((v) => v != null);
+  const inc = rr.filter((x) => x.inc).length;
+  setStatus(`${ok} of ${rr.length} under par${inc ? ` · ${inc} incomplete` : ''}`);
   if (vs.length) { $('big').textContent = fmt(Math.min(...vs)); $('p-res').textContent = `Best ${fmt(Math.min(...vs))} · avg ${fmt(vs.reduce((a, b) => a + b, 0) / vs.length)}`; $('p-res').className = 'p-res'; }
   $('beepinfo').textContent = 'Press Start to run it again';
   window.UI && (UI.renderPlan(), UI.nextShooter(), UI.renderHub());
 }
 function stopSeries() {
   if (T.preset) {
-    clearTimeout(T.nextTimer); clearTimeout(T.doneTimer); T.seriesOn = false;
+    clearTimeout(T.nextTimer); clearTimeout(T.doneTimer); T.doneTimer = 0; T.seriesOn = false;
     if (T.state === 'standby' || T.state === 'live') { for (const o of T.oscs) { try { o.stop(); } catch {} } audio.node.port.postMessage({ type: 'disarm' }); cancelAnimationFrame(T.raf); }
-    if (T.state === 'live' && liveShots().length) autoSaveIfNeeded();
+    if (T.state === 'live' && liveShots().length) { trimExtras(); autoSaveIfNeeded(); }
     clearInterval(T.autoTimer); T.state = 'done'; setMain('START'); releaseWake(); $('beepinfo').textContent = '';
-    setStatus(T.drillRes.length ? `Stopped after ${T.drillRes.length} of ${T.preset.reps} reps` : 'Ready'); window.UI && UI.renderPlan(); return;
+    setStatus(T.drillRes.length ? `Stopped after ${T.drillRes.length} of ${T.preset.reps} reps` : 'Ready'); window.UI && UI.renderPlan(); window.RUNS && RUNS.refreshNext(); return;
   }
   clearTimeout(T.nextTimer); clearTimeout(T.repTimer); if (T.rep) clearTimeout(T.rep.tTimer); T.seriesOn = false;
   if (T.state === 'standby' || T.state === 'live') {
@@ -487,7 +514,7 @@ function stopSeries() {
     if (T.state === 'live' && liveShots().length) autoSaveIfNeeded();
     clearInterval(T.autoTimer); T.state = 'done'; setMain('START'); releaseWake(); $('beepinfo').textContent = '';
     const done = T.series.filter((r) => r.n), best = done.length ? Math.min(...done.map((r) => r.t)) : null;
-    setStatus(done.length ? `Done · ${done.length} strings · best ${fmt(best)}` : 'Ready'); renderStats(); return;
+    setStatus(done.length ? `Done · ${done.length} strings · best ${fmt(best)}` : 'Ready'); renderStats(); window.RUNS && RUNS.refreshNext(); return;
   }
   T.state = 'done'; setMain('START'); releaseWake();
   const s = drySummary(); setStatus(s.n ? `Drill done · ${s.n} reps · best ${fmt(S.dryDrill === 'reload' ? s.bestReload : s.best)}` : 'Ready'); $('beepinfo').textContent = '';
@@ -585,8 +612,18 @@ const clipDB = {
   async list() { return (await this.tx('readonly', (st) => st.getAll())) || []; },
 };
 // One name stem per session, shared by its export and its clips: ST-2026-11-14-1431 (session start, local time).
-function sessionStem(ses) { const d = ses ? new Date(ses.start) : new Date(), z = (n) => String(n).padStart(2, '0'); return `ST-${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}`; }
-function nextClipName() { const ses = sessions.find((x) => x.id === activeSession); const n = ses ? (ses.clips = ses.clips || []).length + 1 : 1; return `${sessionStem(ses)}-clip${n}`; }
+// Sessions keep the stem they were given at start; two started in the same minute get -b, -c… so their clips never share a name.
+function stemAt(d, secs) { const z = (n) => String(n).padStart(2, '0'); return `ST-${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}${secs ? z(d.getSeconds()) : ''}`; }
+function sessionStem(ses) { return ses ? ses.stem || stemAt(new Date(ses.start)) : stemAt(new Date(), true); }
+function uniqueStem(d) { const base = stemAt(d), used = new Set(sessions.map(sessionStem)); let st = base, k = 1; while (used.has(st)) st = base + '-' + 'bcdefghijklmnopqrstuvwxyz'[k++ - 1]; return st; }
+// next clip number = highest so far + 1 (not the count: after deleting clip 2 of 3 the count would reuse "clip3"),
+// and never a name already kept on the phone
+async function nextClipName() {
+  const ses = sessions.find((x) => x.id === activeSession), stem = sessionStem(ses);
+  let n = 1 + Math.max(0, ...((ses && ses.clips) || []).map((c) => +(c.name.match(/-clip(\d+)$/) || [0, 0])[1]));
+  while (await clipDB.get(`${stem}-clip${n}`).catch(() => null)) n++;
+  return `${stem}-clip${n}`;
+}
 // Records made while filming carry the clip's name and where their beep sits in it, so data and video pair up.
 function clipTag(r) { if (film.on && film.log && film.log.recStartCtx != null) { r.clip = film.name; r.clipT = +(T.beepAt - film.log.recStartCtx).toFixed(2); } return r; }
 function filmLog(type, data) { if (!film.log) return; film.log.events.push(Object.assign({ type, ctx: +(audio.ctx.currentTime).toFixed(4), wall: Date.now() }, data)); }
@@ -610,8 +647,8 @@ async function startFilm() {
     // input frame at the start of the video (±~30 ms: from the last level report), so every logged sound gets a clip time
     const L = audio.lastLevel; if (L) film.log.recStartFrame = Math.round(L.frame + (audio.ctx.currentTime - L.ctx) * audio.sr);
   };
-  film.name = nextClipName(); film.log.clip = film.name;
-  const ses = sessions.find((x) => x.id === activeSession); if (ses) { ses.clips.push({ name: film.name, start: new Date().toISOString() }); saveSessions(); }
+  film.name = await nextClipName(); film.log.clip = film.name;
+  const ses = sessions.find((x) => x.id === activeSession); if (ses) { (ses.clips = ses.clips || []).push({ name: film.name, start: new Date().toISOString() }); saveSessions(); }
   film.rec.start(1000); film.on = true; renderFilmChip(); camStatus($('status').textContent, '');
 }
 function stopFilm() {
@@ -638,9 +675,10 @@ function toggleFilm() { if (film.on) stopFilm(); else startFilm(); }
 const train = { on: false, n: 0, top: -120, t0: 0, timer: 0 };
 async function startTrain() {
   if (film.on || T.state === 'standby' || T.state === 'live' || T.learning) { setStatus('Stop the timer or film first', 'err'); return; }
-  await startFilm(); if (!film.on) return;
+  train.ownSes = !activeSession; if (train.ownSes) startSession('Training film');
+  await startFilm(); if (!film.on) { if (train.ownSes) closeSessionQuietly(); return; }
   film.log.kind = 'shot-timer-train-take'; film.log.train = true;
-  audio.node.port.postMessage({ type: 'params', params: { shotDb: ShotDetector.sensitivityToDb(S.sens), echoMs: S.echo, lockMs: S.lock } });
+  audio.node.port.postMessage({ type: 'params', params: rangeParams() });
   audio.node.port.postMessage({ type: 'listen' });      // no beep window, no notch, nothing blanked
   Object.assign(train, { on: true, n: 0, top: -120, t0: Date.now() });
   const v = $('train-cam'); v.srcObject = film.cam; v.classList.toggle('mirror', S.camFacing === 'user'); v.play().catch(() => {});
@@ -653,7 +691,7 @@ function stopTrain() {
   train.on = false; clearInterval(train.timer); releaseWake();
   audio.node.port.postMessage({ type: 'disarm' }); audio.node.port.postMessage({ type: 'params', params: detParams() });
   $('train').hidden = true; document.body.classList.remove('training'); $('train-cam').srcObject = null;
-  stopFilm();
+  stopFilm(); if (train.ownSes) { train.ownSes = false; closeSessionQuietly(); }
 }
 function onTrainSound(m) {
   const t = film.log && film.log.recStartFrame != null ? (m.frame - film.log.recStartFrame) / audio.sr : null;
@@ -878,7 +916,7 @@ function renderShots() {
     const li = document.createElement('li'); if (s.removed) li.className = 'removed';
     const split = !s.removed && prev != null ? s.t - prev : null;
     if (!s.removed) { n++; prev = s.t; }
-    li.innerHTML = `<span class="n">${s.removed ? '' : n}</span><span class="t">${fmt(s.t)}</span><span class="sp">${s.removed ? (s.auto === 'quiet' ? 'quieter · not yours?' : '') : (n === 1 ? 'draw' : fmt(split))}</span>`;
+    li.innerHTML = `<span class="n">${s.removed ? '' : n}</span><span class="t">${fmt(s.t)}</span><span class="sp">${s.removed ? (s.auto === 'quiet' ? 'quieter · not yours?' : s.auto === 'extra' ? 'after the last shot' : '') : (n === 1 ? 'draw' : fmt(split))}</span>`;
     const x = document.createElement('button'); x.className = 'x'; x.textContent = s.removed ? '↺' : '×';
     x.title = s.removed ? 'Restore shot' : 'Not a shot — remove';
     x.onclick = () => { s.removed = !s.removed; if (!s.removed) { s.keep = true; delete s.auto; } renderShots(); renderStats(); if (T.saved) updateSaved(); };
@@ -900,16 +938,18 @@ function autoSaveIfNeeded() {
   const rec = {
     id: Date.now().toString(36), at: new Date().toISOString(), shooter: S.shooter, gun: S.gun,
     delay: +T.delay.toFixed(2), acoustic: T.acoustic, sens: S.sens,
-    shots: T.shots.map((s) => ({ t: +s.t.toFixed(4), db: +s.db.toFixed(1), removed: s.removed || undefined, gated: s.auto === 'quiet' || undefined })), gate: S.gate,
+    shots: serShots(), gate: S.gate,
     drillName: T.preset ? T.preset.name : undefined, rep: T.preset ? T.drillRes.length + 1 : undefined, par: presetPar() || null,
+    drillShots: T.preset ? T.preset.shots : undefined, steps: T.preset ? T.preset.steps : undefined, targets: T.preset ? T.preset.targets : undefined,
   };
   clipTag(rec);
   history.unshift(tagRecord(rec)); saveHistory(); T.saved = rec.id; renderSession();
   $('btn-review').textContent = 'Score…'; $('btn-review').disabled = false; renderHistory();
 }
+const serShots = () => T.shots.map((s) => ({ t: +s.t.toFixed(4), db: +s.db.toFixed(1), removed: s.removed || undefined, gated: s.auto === 'quiet' || undefined, extra: s.auto === 'extra' || undefined, keep: s.keep || undefined }));
 function updateSaved() {
   const r = history.find((h) => h.id === T.saved); if (!r) return;
-  r.shots = T.shots.map((s) => ({ t: +s.t.toFixed(4), db: +s.db.toFixed(1), removed: s.removed || undefined, gated: s.auto === 'quiet' || undefined })); saveHistory(); renderHistory();
+  r.shots = serShots(); saveHistory(); renderHistory();
 }
 function recShots(r) { return r.shots.filter((s) => !s.removed).map((s) => s.t); }
 
@@ -999,8 +1039,9 @@ function swipeRow(c, onTap, onDel) {
   c.querySelector('.hs-del').onclick = (e) => { e.stopPropagation(); onDel(); };
 }
 function deleteGroup(g) {
-  const st = groupStats(g);
-  if (!confirm(`Delete this ${g.kind === 'dry' ? 'dry fire' : 'range'} session from ${dayStr(g.start)} and its ${st.n} ${st.nL.toLowerCase()}? This cannot be undone.`)) { renderHistory(); return; }
+  const st = groupStats(g), clips = g.ses ? (g.ses.clips || []).map((c) => c.name) : [];
+  if (!confirm(`Delete this ${g.kind === 'dry' ? 'dry fire' : 'range'} session from ${dayStr(g.start)} and its ${st.n} ${st.nL.toLowerCase()}${clips.length ? ` and ${clips.length} video clip${clips.length > 1 ? 's' : ''} kept on this phone` : ''}? This cannot be undone.`)) { renderHistory(); return; }
+  for (const n of clips) clipDB.del(n).catch(() => {});      // left behind, they took tens of MB each with no way to find them
   const ids = new Set(g.recs);
   history = history.filter((h) => !ids.has(h));
   if (g.ses) { sessions = sessions.filter((x) => x !== g.ses); if (activeSession === g.ses.id) activeSession = null; }
@@ -1027,7 +1068,7 @@ function exportCsv() { shareFiles([new File([csvOf(history)], `shot-timer-all-${
 function startSession(auto) {
   const d = new Date(), def = `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
   const name = auto ? `${auto} · ${def}` : (prompt('Session name', def) || '').trim(); if (!name) return;
-  const ses = { id: 's' + Date.now().toString(36), name, start: d.toISOString(), end: null, cfgStart: cfgSnap(), clips: [] };
+  const ses = { id: 's' + Date.now().toString(36), name, start: d.toISOString(), stem: uniqueStem(d), end: null, cfgStart: cfgSnap(), clips: [] };
   sessions.unshift(ses); activeSession = ses.id; saveSessions(); renderSession();
 }
 function endSession() {
@@ -1036,6 +1077,27 @@ function endSession() {
   if (ses && !sessionRecs(ses.id).length && !(ses.clips || []).length) sessions = sessions.filter((x) => x !== ses);   // nothing saved: drop it quietly
   saveSessions(); renderSession(); renderHistory();
   if (ses && sessions.includes(ses)) { $('ses-dlg-info').textContent = `${ses.name}\n${sessionLine(ses)}`; $('ses-dlg').dataset.id = ses.id; $('ses-dlg').showModal(); }
+}
+function closeSessionQuietly() {      // a session the app opened for itself (a train take): end it, no dialog
+  const ses = sessions.find((x) => x.id === activeSession); activeSession = null;
+  if (ses) { ses.end = new Date().toISOString(); if (!sessionRecs(ses.id).length && !(ses.clips || []).length) sessions = sessions.filter((x) => x !== ses); }
+  saveSessions(); renderSession(); renderHistory();
+}
+// ---------- backup / restore: everything the app keeps in this browser, in one file (video clips are not included) ----------
+function backupAll() {
+  const data = {}; for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('st.')) data[k] = localStorage.getItem(k); }
+  const d = new Date(), z = (n) => String(n).padStart(2, '0');
+  const json = { kind: 'shot-timer-backup', version: 1, build: BUILD, at: d.toISOString(), strings: history.length, sessions: sessions.length, data };
+  shareFiles([new File([JSON.stringify(json)], `shot-timer-backup-${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}.json`, { type: 'application/json' })]);
+}
+async function restoreAll(e) {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  let j; try { j = JSON.parse(await f.text()); } catch { alert('That file is not a Shot Timer backup.'); return; }
+  if (!j || j.kind !== 'shot-timer-backup' || !j.data) { alert('That file is not a Shot Timer backup.'); return; }
+  if (!confirm(`Replace everything on this phone with the backup from ${new Date(j.at).toLocaleString()} (${j.strings} strings/reps, ${j.sessions} sessions)? What is on the phone now is lost. Video clips are not touched.`)) return;
+  for (const k of Object.keys(localStorage)) if (k.startsWith('st.')) localStorage.removeItem(k);
+  try { for (const [k, v] of Object.entries(j.data)) if (k.startsWith('st.')) localStorage.setItem(k, v); } catch { alert('Not enough room on the phone to restore all of it.'); }
+  location.reload();
 }
 function sessionRecs(id) { return history.filter((h) => h.session === id); }
 function sessionLine(ses) {
@@ -1078,14 +1140,14 @@ async function openSession(id) {
   const box = $('hd-body'); box.innerHTML = shown.length ? '' : '<p class="p-hint" style="text-align:center;margin:20px 0">Nothing saved in this session yet.</p>';
   for (const grp of groups) {
     const par = grp.recs.find((r) => r.par)?.par, n = grp.recs.length;
-    const under = par ? grp.recs.filter((r) => main(r) != null && main(r) <= par).length : 0;
+    const under = par ? grp.recs.filter((r) => r.mode !== 'dry' ? recUnderPar(r) : main(r) != null && main(r) <= par).length : 0;
     const nShots = grp.recs[0].mode === 'dry' ? null : recShots(grp.recs[0]).length;
     const sub = grp.recs[0].mode === 'dry' ? `${n} rep${n === 1 ? '' : 's'}` : par ? `${nShots} shots · par ${par.toFixed(2)}` : 'no par';
     const right = par ? `${under} / ${n} under par` : `${n} ${grp.recs[0].mode === 'dry' ? (n === 1 ? 'rep' : 'reps') : (n === 1 ? 'string' : 'strings')}`;
     const el = document.createElement('div'); el.className = 'hd-drill';
     el.innerHTML = `<div class="hd-dh"><b>${esc(grp.name)}</b><i>${sub}</i><span class="hd-par">${right}</span></div>`;
     grp.recs.forEach((r, i) => {
-      const v = main(r), ok = par && v != null ? v <= par : null, q = r.mode === 'dry' ? null : summarize(recShots(r));
+      const v = main(r), ok = par && v != null ? (r.mode === 'dry' ? v <= par : recUnderPar(r)) : null, q = r.mode === 'dry' ? null : summarize(recShots(r));
       const side = r.mode === 'dry' ? (r.drill === 'draw' && r.react != null ? `react ${f2(r.react)}` : '') : r.score && r.score.hf != null ? `HF ${r.score.hf.toFixed(1)}` : par ? '—' : `${q.count} shot${q.count === 1 ? '' : 's'}`;
       const row = document.createElement('button'); row.className = 'hd-str';
       row.innerHTML = `<span class="hd-n">${i + 1}</span><span class="hd-i" title="${esc(r.shooter)}">${esc(ini(r.shooter))}</span><b>${v == null ? '—' : f2(v)}</b><span class="${ok == null ? '' : ok ? 'hd-ok' : 'hd-no'}">${ok == null ? '' : ok ? IC.ok : IC.no}</span><span class="hd-hf">${side}</span><span class="hd-cl">${r.clip ? IC.cam : ''}</span>`;
@@ -1141,7 +1203,7 @@ let screen = 'home';
 function showScreen(v) {
   screen = v;
   document.querySelectorAll('.view').forEach((el) => el.classList.toggle('active', el.id === 'view-' + v));
-  const train = ['home', 'drymenu', 'range', 'editor', 'timer'].includes(v);
+  const train = ['home', 'drymenu', 'range', 'editor', 'timer', 'runs', 'run'].includes(v);
   if (v === 'home') clipReminder();
   if (train) lastTrain = v;
   if (window.UI) UI.onScreen(v);
@@ -1152,7 +1214,7 @@ let lastTrain = 'home';
 // Enter the timer: free shooting (preset null), a drill from the Range screen, or a dry-fire drill.
 function enterDrill(mode, drill, preset) {
   if (drill) S.dryDrill = drill;
-  T.preset = mode === 'range' && preset ? preset : null; T.drillRes = [];
+  T.preset = mode === 'range' && preset ? preset : null; T.drillRes = []; window.RUNS && RUNS.hideRunDone();
   setMode(mode); saveSettings();
   $('drill-title').textContent = T.preset ? T.preset.name : DRILL_NAMES[mode === 'dry' ? S.dryDrill : 'range'];
   $('seg-rep').style.visibility = T.preset ? 'hidden' : 'visible';
@@ -1258,7 +1320,7 @@ function setMode(m) {
 }
 function showView(v) {
   if (v === 'train') return showScreen(lastTrain);
-  if (['home', 'drymenu', 'range', 'editor', 'timer', 'history', 'settings'].includes(v)) return showScreen(v);
+  if (['home', 'drymenu', 'range', 'editor', 'timer', 'runs', 'run', 'history', 'settings'].includes(v)) return showScreen(v);
   document.querySelectorAll('.view').forEach((el) => el.classList.toggle('active', el.id === 'view-' + v));
   document.querySelectorAll('.tab').forEach((el) => el.classList.toggle('active', el.dataset.view === v));
   if (v === 'history') renderHistory();
@@ -1272,6 +1334,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Single/Repeat belongs to the CURRENT mode. (v0.6 switched to dry fire here, so Range + Repeat listened for clicks.)
   document.querySelectorAll('#seg-rep button').forEach((b) => b.onclick = () => { if (T.state === 'standby' || T.state === 'live' || T.state === 'reholster') return; const on = b.dataset.rep === 'repeat'; if (isDry()) S.dryRepeat = on; else S.rangeRepeat = on; saveSettings(); setMode(S.mode); });
   $('btn-export').onclick = exportCsv;
+  $('btn-backup').onclick = backupAll; $('btn-restore').onclick = () => $('file-restore').click(); $('file-restore').onchange = restoreAll;
+  // ask the browser not to clear this app's data when the phone runs low on space
+  try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch {}
   document.querySelectorAll('[data-drill]').forEach((b) => b.onclick = () => enterDrill('dry', b.dataset.drill));
   document.querySelectorAll('[data-back]').forEach((b) => b.onclick = () => showScreen(b.dataset.back));
   $('btn-back').onclick = leaveDrill;
@@ -1292,7 +1357,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // one session per trip: a session survives the app being closed or reloaded at the range; one left open for more
   // than 8 hours is closed now (its reps stay), and an empty one is dropped
   if (activeSession) { const ses = sessions.find((x) => x.id === activeSession), last = ses ? Math.max(new Date(ses.start), ...sessionRecs(ses.id).map((r) => new Date(r.at))) : 0;
-    if (!ses || Date.now() - last > 8 * 3600e3) { if (ses) { ses.end = ses.end || new Date().toISOString(); if (!sessionRecs(ses.id).length) sessions = sessions.filter((x) => x !== ses); } activeSession = null; saveSessions(); } }
+    if (!ses || Date.now() - last > 8 * 3600e3) { if (ses) { ses.end = ses.end || new Date().toISOString(); if (!sessionRecs(ses.id).length && !(ses.clips || []).length) sessions = sessions.filter((x) => x !== ses); } activeSession = null; saveSessions(); } }
   bindSettings(); renderChips(); setMode(S.mode); renderHistory(); showScreen('home');
   document.addEventListener('visibilitychange', () => { if (!document.hidden && audio.ctx && audio.ctx.state !== 'running') audio.ctx.resume(); });
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});

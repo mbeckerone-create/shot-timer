@@ -49,11 +49,13 @@
     renderWho();
   }
   function chipFor(name, removable) {
-    const b = el('button', 'on ini', initials(name)); b.title = name; b.setAttribute('aria-label', removable ? `${name}. Press and hold to remove` : name);
+    const up = name === S.shooter, b = el('button', 'on ini' + (up ? ' up' : ''), initials(name)); b.title = name;
+    b.setAttribute('aria-label', `${name}${up ? ', up now' : ''}. Tap to make ${firstName(name)} up${removable ? '. Press and hold to remove' : ''}`);
+    let t = null, held = false; const cancel = () => { clearTimeout(t); t = null; b.classList.remove('holding'); };
+    b.onclick = () => { if (held) { held = false; return; } S.shooter = name; saveSettings(); renderChips(); renderWho(); };
     if (!removable) return b;
-    let t = null; const cancel = () => { clearTimeout(t); t = null; b.classList.remove('holding'); };
-    b.addEventListener('pointerdown', () => { b.classList.add('holding'); t = setTimeout(() => {
-      cancel(); inSes = inSes.filter((x) => x !== name); if (S.shooter === name) { S.shooter = inSes[0]; saveSettings(); renderChips(); }
+    b.addEventListener('pointerdown', () => { held = false; b.classList.add('holding'); t = setTimeout(() => {
+      cancel(); held = true; inSes = inSes.filter((x) => x !== name); if (S.shooter === name) { S.shooter = inSes[0]; saveSettings(); renderChips(); }
       saveWho(); toast(`Removed ${name}`); renderWho(); renderResults(); }, 550); });
     ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => b.addEventListener(ev, cancel));
     b.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -61,12 +63,9 @@
   }
   function renderWho() {
     const me = S.shooters[0]; if (!inSes.includes(me)) inSes.unshift(me);
-    const top = $('hub-who'); top.innerHTML = ''; top.appendChild(chipFor(me, false));
-    const others = inSes.filter((n) => n !== me);
-    if (others.length && !$('sc-more').classList.contains('open')) { const c = el('button', 'ini count', '+' + others.length); c.onclick = () => togglePeople(true); top.appendChild(c); }
-    const box = $('hub-added'); box.innerHTML = '';
-    others.forEach((n) => box.appendChild(chipFor(n, true)));
-    const add = el('button', 'ini empty', '+'); add.setAttribute('aria-label', 'Add people to this session'); add.onclick = () => $('who-q').focus(); box.appendChild(add);
+    if (!inSes.includes(S.shooter)) { S.shooter = me; saveSettings(); renderChips(); }
+    const top = $('hub-who'); top.innerHTML = '';
+    inSes.forEach((n) => top.appendChild(chipFor(n, n !== me)));
   }
   function renderResults() {
     const res = $('who-results'); if (res.hidden) return;
@@ -136,18 +135,29 @@
   const saveMine = () => saveJSON('st.drills', MINE);
   let selDrill = null, moreOpen = false;
   const runs = (pr) => history.filter((r) => r.drillName === pr.name).length;
+  const chev = () => el('span', 'hd-chev2', '›');
+  // a drill or free shooting starts the session if there isn't one yet (with the people picked on the card)
+  function ensureSession() {
+    if (activeSession) return;
+    for (const n of tempNames) if (!S.shooters.includes(n)) S.shooters.push(n); tempNames = []; saveSettings();
+    startSession('Range'); saveWho();
+  }
+  function shoot(pr) { ensureSession(); enterDrill('range', null, pr || null); }
   function hubRow(pr) {
-    const r = el('div', 'hd-row' + (pr === selDrill ? ' sel' : '')); r.setAttribute('role', 'button'); r.setAttribute('aria-pressed', pr === selDrill);
-    const txt = el('div', 'hd-txt'); txt.appendChild(el('b', null, pr.name));
+    const r = el('div', 'hd-row hd-go'); r.setAttribute('role', 'button'); r.tabIndex = 0;
+    const txt = el('div', 'hd-txt'); txt.append(el('b', null, pr.name), el('small', null, `${pr.shots} shot${pr.shots === 1 ? '' : 's'} · ${pr.reps} rep${pr.reps === 1 ? '' : 's'} · par ${pr.par.toFixed(2)}`));
     const ed = el('button', 'hd-edit', 'Edit'); ed.onclick = (e) => { e.stopPropagation(); openEditor(pr); };
-    const chk = el('span', 'hd-check'); chk.innerHTML = '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>'; r.append(chk, txt, ed); r.onclick = () => { selDrill = selDrill === pr ? null : pr; renderHubDrills(); };
+    r.append(txt, ed, chev()); r.onclick = () => shoot(pr);
     return r;
   }
   function renderHubDrills() {
     const box = $('hub-dlist'); box.innerHTML = '';
-    const all = [...MINE, ...STD]; if (selDrill && !all.includes(selDrill)) selDrill = null;
+    const free = el('div', 'hd-row hd-go hd-free'); free.setAttribute('role', 'button'); free.tabIndex = 0;
+    free.innerHTML = '<svg class="ic hd-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="0.8"/></svg>';
+    const ft = el('div', 'hd-txt'); ft.append(el('b', null, 'Free shooting'), el('small', null, 'Beep, shoot, see splits. No par, no plan')); free.append(ft, chev());
+    free.onclick = () => shoot(null); box.appendChild(free);
+    const all = [...MINE, ...STD];
     const favs = all.slice().sort((x, y) => runs(y) - runs(x)).slice(0, 3), rest = all.filter((pr) => !favs.includes(pr));
-    if (selDrill && rest.includes(selDrill)) moreOpen = true;
     favs.forEach((pr) => box.appendChild(hubRow(pr)));
     const tog = el('div', 'hd-row hd-more' + (moreOpen ? ' open' : '')); tog.setAttribute('role', 'button');
     tog.append(el('span', 'hd-txt', `All drills (${rest.length})`), el('span', 'hd-chev', '⌄')); tog.onclick = () => { moreOpen = !moreOpen; renderHubDrills(); };
@@ -159,41 +169,27 @@
   function sessionSummary() {
     const ses = sessions.find((x) => x.id === activeSession); if (!ses) return '';
     const recs = sessionRecs(ses.id), mins = Math.round((Date.now() - new Date(ses.start)) / 60000);
-    return `${recs.length} ${recs.length === 1 ? 'string' : 'strings/reps'} · ${mins} min`;
-  }
-  function renderHubLog() {
-    const box = $('hub-log'); box.innerHTML = ''; if (!activeSession) return;
-    const groups = [];
-    for (const r of sessionRecs(activeSession).slice().reverse()) {
-      const name = r.mode === 'dry' ? DRILL_NAMES[r.drill || 'trigger'] : (r.drillName || 'Free shooting');
-      let g = groups[groups.length - 1]; if (!g || g.name !== name) groups.push(g = { name, recs: [] }); g.recs.push(r);
-    }
-    groups.reverse().forEach((g) => {
-      const vals = g.recs.map((r) => (r.mode === 'dry' ? (r.drill === 'reload' ? r.reload : recShots(r)[0]) : recShots(r).slice(-1)[0])).filter((v) => v != null);
-      const under = g.recs.filter((r) => r.par && recShots(r).length && recShots(r).slice(-1)[0] <= r.par).length;
-      const row = el('div', 'hub-row'); row.append(el('span', null, g.name), el('b', null, vals.length ? fmt(Math.min(...vals)) : '—'));
-      const unit = g.recs[0].mode === 'dry' || g.recs[0].drillName ? 'rep' : 'string';
-      row.append(el('i', null, `${g.recs.length} ${unit}${g.recs.length === 1 ? '' : 's'}${g.recs[0].par ? ` · ${under} under par` : ''}`), el('i', null, vals.length ? 'best' : ''));
-      box.appendChild(row);
-    });
+    return `${recs.length} ${recs.length === 1 ? 'run' : 'runs'} · ${mins >= 60 ? `${Math.floor(mins / 60)} h ${mins % 60} min` : `${mins} min`}`;
   }
   function renderHub() {
     const on = !!activeSession, ses = sessions.find((x) => x.id === activeSession);
-    $('ses-card').classList.toggle('on', on); $('ses-btn').textContent = on ? 'End' : 'Start'; $('ses-go').hidden = !on;
+    $('ses-card').classList.toggle('on', on); $('ses-btn').textContent = on ? 'End' : 'Start';
     $('ses-title').textContent = on && ses ? `Session · ${new Date(ses.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'Session';
-    renderWho(); renderHubDrills(); renderHubLog();
+    $('ses-sum').textContent = on ? sessionSummary() : 'Starts when you pick a drill';
+    renderWho(); renderHubDrills();
+    const has = on && sessionRecs(activeSession).length; $('hub-log-h').hidden = !has; $('hub-log').hidden = !has;
+    if (window.RUNS) RUNS.hubLog($('hub-log'));
     $('dry-ses-t').textContent = on && ses ? `Session · started ${new Date(ses.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'Session';
     $('dry-ses-sum').textContent = on ? sessionSummary() : 'Starts when you pick a drill'; $('dry-end').hidden = !on;
     $('dry-sbar').querySelector('.dot').style.opacity = on ? 1 : .3;
   }
-  const goShoot = () => enterDrill('range', null, selDrill);
+  // End is one tap from Shoot: ask first
+  const endAsk = () => { const ses = sessions.find((x) => x.id === activeSession); return !ses || !sessionRecs(ses.id).length || confirm(`End this session? ${sessionSummary()}.`); };
   $('ses-btn').onclick = () => {
-    if (activeSession) { endSession(); resetWho(); renderHub(); return; }
-    for (const n of tempNames) if (!S.shooters.includes(n)) S.shooters.push(n); tempNames = []; saveSettings();
-    startSession('Range'); saveWho(); toast('Session started'); goShoot();
+    if (activeSession) { if (!endAsk()) return; endSession(); resetWho(); renderHub(); return; }
+    ensureSession(); toast('Session started'); renderHub();
   };
-  $('ses-go').onclick = goShoot;
-  $('dry-end').onclick = () => { endSession(); resetWho(); renderHub(); };
+  $('dry-end').onclick = () => { if (!endAsk()) return; endSession(); resetWho(); renderHub(); };
   $('hub-new').onclick = () => openEditor(null);
 
   // ---------- drill editor: describe it (voice or typing), then the fields ----------
@@ -285,7 +281,7 @@
     ed.name = ($('p-f-name').value || '').trim() || 'My drill';
     const clean = norm(ed); let saved;
     if (edTarget) { Object.keys(edTarget).forEach((k) => delete edTarget[k]); Object.assign(edTarget, clean); saved = edTarget; } else { saved = clean; MINE.push(saved); }
-    saveMine(); toast(`Saved “${ed.name}”`); selDrill = saved; showScreen('range');
+    saveMine(); toast(`Saved “${ed.name}”`); showScreen('range');
   };
   $('p-ed-del').onclick = () => { MINE = MINE.filter((x) => x !== edTarget); saveMine(); toast('Deleted'); showScreen('range'); };
 
@@ -371,7 +367,7 @@
     else { const e = byDay[hsel], when = new Date(hsel).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
       $('h-day').textContent = e ? `${when} · ${e.k === 2 ? 'Range' : 'Dry fire'} · ${e.n} ${e.n === 1 ? 'string' : 'strings/reps'}${e.best != null ? ` · best ${e.best.toFixed(2)}` : ''}` : `${when} · rest day`; }
     const car = $('h-car'); car.innerHTML = '';
-    [...MINE, ...STD].forEach((pr) => { const c = el('button', 'h-card'); c.appendChild(el('b', null, pr.name)); c.onclick = () => { selDrill = pr; showScreen('range'); }; car.appendChild(c); });
+    [...MINE, ...STD].forEach((pr) => { const c = el('button', 'h-card'); c.appendChild(el('b', null, pr.name)); c.onclick = () => shoot(pr); car.appendChild(c); });
     const live = history.filter((r) => r.mode !== 'dry' && recShots(r).length).map((r) => ({ t: recShots(r)[0], at: r.at }));
     const best = live.sort((a, b) => a.t - b.t)[0];
     $('h-prtxt').textContent = best ? `${best.t.toFixed(3)} s` : 'Shoot a string to set one';
@@ -390,9 +386,10 @@
   function onScreen(v) {
     if (v === 'home') { if (!activeSession) resetWho(); renderHome(); }
     if (v === 'range' || v === 'drymenu') renderHub();
-    if (v === 'timer') renderPlan();
+    if (v === 'timer') { renderPlan(); if (window.RUNS) RUNS.refresh(); }
   }
-  window.UI = { renderPlan, gauge, parMark, openScore, nextShooter, renderHub, onScreen, renderHome };
+  const allDrills = () => [...MINE, ...STD];
+  window.UI = { renderPlan, gauge, parMark, openScore, nextShooter, renderHub, onScreen, renderHome, allDrills, shoot, initials };
   if (!S.skinSet081) { S.skin = 'softdark'; S.skinSet081 = 1; }   // v0.8.1: Soft dark becomes the look, once; Settings › Look still changes it
   applySkin(S.skin || 'softdark'); renderWho(); onScreen(screen);
 })();
