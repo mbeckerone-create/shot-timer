@@ -59,7 +59,9 @@ for (const [clip, rs] of Object.entries(byClip)) {
     let beep = null; for (let i = s0; i < Math.min(x.length, s0 + 3 * sr) && beep === null; i += 128) beep = bf.process(x.subarray(i, i + 128), i);
     const b = beep !== null ? beep / sr : ct;
     const lastLogged = Math.max(0, ...r.shots.map((q) => q.t));
-    return { r, beep: b, acoustic: beep !== null, end: b + Math.max(lastLogged, 3) + 1.0 };
+    // an incomplete drill rep may have stopped listening early: look 5 s further to see shots fired after it quit
+    const loud = r.shots.filter((q) => !q.removed && q.db >= -15).length, short = r.drillShots && loud < r.drillShots;
+    return { r, beep: b, acoustic: beep !== null, end: b + Math.max(lastLogged, 3) + (short ? 6.0 : 1.0) };
   });
   for (let i = 0; i < strings.length - 1; i++) strings[i].end = Math.min(strings[i].end, strings[i + 1].beep - 0.3);
   // stress the input
