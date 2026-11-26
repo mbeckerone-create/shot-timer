@@ -225,7 +225,6 @@
 
       <h2>Start beep</h2>
       <div class="grp">
-      <div class="row"><span>Random delay (s)</span><span class="row-pair"><input id="set-dmin" type="number" min="0" max="30" step="0.5" aria-label="Shortest delay"><i>to</i><input id="set-dmax" type="number" min="0" max="30" step="0.5" aria-label="Longest delay"></span></div>
       <label class="row"><span>Beep pitch (Hz)</span><input id="set-hz" type="number" min="800" max="4000" step="100"></label>
       <label class="row"><span>Beep length (ms)</span><input id="set-blen" type="number" min="100" max="800" step="50"></label>
       <label class="row"><span>Par time for free shooting (s, 0 = off)</span><input id="set-par" type="number" min="0" max="60" step="0.05"></label>
@@ -236,9 +235,14 @@
       <label class="row"><span>Ignore sounds this much quieter than my shots (dB, 0 = off)</span><input id="set-gate" type="number" min="0" max="40" step="1"></label>
       </div>
       <p class="hint">Your gun is the loudest thing the phone hears. Shots from other lanes and echoes are much quieter and get struck out (open the run and tap Keep to bring one back).</p>
+
+      <h2>Free shooting · time between strings</h2>
       <div class="grp">
-      <label class="row"><span>Repeat: reset time between strings (s)</span><input id="set-rreset" type="number" min="2" max="60" step="1"></label>
+      <label class="row"><span>1 · String ends after this much quiet (s)</span><input id="set-auto" type="number" min="1" max="60" step="0.5"></label>
+      <label class="row"><span>2 · Repeat: reset countdown (s)</span><input id="set-rreset" type="number" min="1" max="60" step="1"></label>
+      <div class="row"><span>3 · Random delay before the beep (s)</span><span class="row-pair"><input id="set-dmin" type="number" min="0" max="30" step="0.5" aria-label="Shortest delay"><i>to</i><input id="set-dmax" type="number" min="0" max="30" step="0.5" aria-label="Longest delay"></span></div>
       </div>
+      <p class="hint" id="free-gap"></p>
 
       <h2>Dry fire</h2>
       <div class="grp">
@@ -270,7 +274,6 @@
       <div class="grp">
       <label class="row"><span>Echo window (ms)</span><input id="set-echo" type="number" min="0" max="600" step="10"></label>
       <label class="row"><span>Min time between shots (ms)</span><input id="set-lock" type="number" min="40" max="400" step="10"></label>
-      <label class="row"><span>Auto-stop after quiet (s, 0 = off)</span><input id="set-auto" type="number" min="0" max="60" step="1"></label>
       </div>
 
       <h2>Shooters &amp; guns</h2>

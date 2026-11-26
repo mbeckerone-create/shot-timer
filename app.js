@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.8.10';
+const BUILD = 'v0.8.11';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -1336,17 +1336,22 @@ function bindSettings() {
   { const v = $('set-vol'); if (v) { v.value = Math.round((S.vol ?? 1) * 100); $('lbl-vol').textContent = v.value + '%';
     v.oninput = () => { S.vol = v.value / 100; $('lbl-vol').textContent = v.value + '%'; saveSettings(); };
     v.onchange = async () => { try { await ensureAudio(); scheduleBeep(audio.ctx.currentTime + 0.05, S.blen); } catch (e) {} }; } }
+  const freeGap = () => {             // last shot -> next beep in free shooting with Repeat on
+    const q = S.auto > 0 ? S.auto : 4, lo = q + S.rangeReset + Math.min(S.dmin, S.dmax), hi = q + S.rangeReset + Math.max(S.dmin, S.dmax);
+    $('free-gap').textContent = `With Repeat on: about ${lo.toFixed(lo % 1 ? 1 : 0)}–${hi.toFixed(hi % 1 ? 1 : 0)} s from your last shot to the next beep. The random delay is used by drills too; drills wait up to 30 s for all their shots.`;
+  };
   for (const [id, k] of Object.entries(NUMS)) {
     const el = $(id); el.value = S[k];
     el.addEventListener('input', () => {
       const v = parseFloat(el.value); if (!isFinite(v)) return; S[k] = v; saveSettings();
+      if (k === 'auto' || k === 'rangeReset' || k === 'dmin' || k === 'dmax') freeGap();
       if (k === 'sens') $('lbl-sens').textContent = v;
       if (k === 'drySens') $('lbl-dsens').textContent = v;
       if (k === 'clickMatch') $('lbl-match').textContent = v.toFixed(2);
       if (audio.node) audio.node.port.postMessage({ type: 'params', params: detParams() });
     });
   }
-  $('lbl-sens').textContent = S.sens; $('lbl-dsens').textContent = S.drySens; $('lbl-match').textContent = S.clickMatch.toFixed(2);
+  freeGap(); $('lbl-sens').textContent = S.sens; $('lbl-dsens').textContent = S.drySens; $('lbl-match').textContent = S.clickMatch.toFixed(2);
   $('btn-learn2').onclick = () => { enterDrill('dry'); startLearn('click'); };
   $('btn-learn-hol').onclick = () => { enterDrill('dry'); startLearn('holster'); }; renderClickInfo();
   const lines = (el) => el.value.split('\n').map((s) => s.trim()).filter(Boolean);
