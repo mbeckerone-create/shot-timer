@@ -266,8 +266,9 @@ body.training { overflow: hidden; }
 #app .sb-go .mi { font-size: 13px; margin-left: 2px; }
 
 /* the page stays put: no rubber-band, the tab bar never floats */
-html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
-body { position: fixed; inset: 0; }
+/* (v0.8.7 pinned the body with position: fixed; on an iPhone home-screen app that left a ~40 pt grey strip under the
+   tab bar. overscroll-behavior alone stops the rubber-band.) */
+html, body { overscroll-behavior: none; }
 #app .view.scr, #app .ed-scroll, body > .view.legacy { overscroll-behavior: contain; }
 
 /* readable in sun: lighter grey, nothing under ~13 px on the phone */
@@ -360,3 +361,8 @@ dialog.sheet #picker-list { display: flex; flex-direction: column; gap: 8px; }
 #app .ed-row .grow { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 #app #ed-steps .ed-row > .grow:not(:has(.mi)) { display: none; }      /* "on": the T buttons say it */
 #app #ed-steps .ed-tgs { margin-left: auto; }
+
+/* History: the three numbers at the top; the bests open their session */
+#app .hs-best > button, #app .hs-best > div { display: flex; flex-direction: column; align-items: center; gap: 1px; border: 0; border-right: 1px solid var(--p-line); background: none; color: var(--p-text); font: inherit; padding: 2px 0; min-height: 44px; justify-content: center; }
+#app .hs-best > :last-child { border-right: 0; }
+#app .hs-best > button { cursor: pointer; }

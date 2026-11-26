@@ -137,12 +137,18 @@
   const runs = (pr) => history.filter((r) => r.drillName === pr.name).length;
   const chev = () => el('span', 'mi mi-chev hd-chev2');
   // a drill or free shooting starts the session if there isn't one yet (with the people picked on the card)
-  function ensureSession() {
+  function ensureSession(kind) {
     if (activeSession) return;
     for (const n of tempNames) if (!S.shooters.includes(n)) S.shooters.push(n); tempNames = []; saveSettings();
-    startSession('Range'); saveWho();
+    startSession(kind || 'Range'); saveWho();
   }
-  function shoot(pr) { ensureSession(); enterDrill('range', null, pr || null); }
+  // no session yet: ask, so opening a drill to look around doesn't log a session
+  async function askSession(kind) {
+    if (activeSession) return;
+    if (await askSheet('Start a session?', 'Runs are saved together in a session with its time. Not now: they are saved on their own.', 'Start session', 'Not now')) { ensureSession(kind); toast('Session started'); }
+  }
+  async function shoot(pr) { await askSession('Range'); enterDrill('range', null, pr || null); }
+  async function shootDry(drill) { await askSession('Dry fire'); enterDrill('dry', drill); }
   function hubRow(pr) {
     const r = el('div', 'hd-row hd-go'); r.setAttribute('role', 'button'); r.tabIndex = 0;
     const txt = el('div', 'hd-txt'); txt.append(el('b', null, pr.name), el('small', null, `${pr.shots} shot${pr.shots === 1 ? '' : 's'} · ${pr.reps} rep${pr.reps === 1 ? '' : 's'} · par ${pr.par.toFixed(2)}`));
@@ -401,7 +407,7 @@
     if (v === 'timer') { renderPlan(); if (window.RUNS) RUNS.refresh(); }
   }
   const allDrills = () => [...MINE, ...STD];
-  window.UI = { renderPlan, gauge, parMark, openScore, nextShooter, renderHub, onScreen, renderHome, allDrills, shoot, initials };
+  window.UI = { renderPlan, gauge, parMark, openScore, nextShooter, renderHub, onScreen, renderHome, allDrills, shoot, shootDry, initials };
   if (!S.skinSet081) { S.skin = 'softdark'; S.skinSet081 = 1; }   // v0.8.1: Soft dark becomes the look, once; Settings › Look still changes it
   applySkin(S.skin || 'softdark'); renderWho(); onScreen(screen);
 })();

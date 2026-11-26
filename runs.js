@@ -41,9 +41,12 @@
   }
   const sesOf = (r) => (r && r.session) || activeSession;
   const groupRecs = (sid, key) => history.filter((h) => h.session === sid && keyOf(h) === key);   // newest first
+  // drill visits ("events") in a session, oldest first; each run belongs to one
+  const sesEvents = (sid) => eventsOf(history.filter((h) => h.session === sid));
+  const eventOf = (r) => sesEvents(sesOf(r)).find((e) => e.recs.includes(r)) || { id: null, key: keyOf(r), recs: [r] };
   function runLabel(r) {                                             // "Rep 2" in a drill, "String 3" in free shooting
     if (r.mode !== 'dry' && r.rep) return `Rep ${r.rep}`;
-    const same = groupRecs(sesOf(r), keyOf(r)).filter((h) => h.shooter === r.shooter).reverse();
+    const same = eventOf(r).recs.filter((h) => h.shooter === r.shooter).reverse();
     return `${r.mode === 'dry' || r.drillName ? 'Rep' : 'String'} ${same.indexOf(r) + 1}`;
   }
   function saveEdit(r) {
@@ -106,7 +109,7 @@
       const bar = el('i'); bar.style.height = h + '%'; bar.style.background = x.kind === 'draw' ? 'var(--rd-draw)' : x.best ? 'var(--p-mark)' : tgColor(x.tg);
       c.append(el('b', null, f2(x.v)), bar, el('span', null, x.best ? `${x.label} · best` : x.label)); bars.appendChild(c);
     }
-    $('rd-all-t').innerHTML = `${free ? 'All free shooting today' : 'All runs of this drill today'} <i>· ${groupRecs(sesOf(r), key).length}</i>`;
+    $('rd-all-t').innerHTML = `${free ? 'All strings this time' : 'All reps this time'} <i>· ${eventOf(r).recs.length}</i>`;
     refreshNext();
   }
   function refreshNext(left) {
@@ -121,15 +124,13 @@
   $('rd-score').onclick = () => { if (window.UI) UI.openScore(); };
   $('rd-del').onclick = () => { const r = history.find((h) => h.id === rdId); if (r && confirm(`Delete this run (${f2(total(r))} s)? It won't count in the session.`)) deleteRun(r); };
   $('rd-card').onclick = () => rdId && openRun(rdId, 'timer');
-  $('rd-all').onclick = () => { const r = history.find((h) => h.id === rdId); if (r) openRuns(keyOf(r), 'timer', sesOf(r)); };
+  $('rd-all').onclick = () => { const r = history.find((h) => h.id === rdId); if (r) openRuns(eventOf(r).id, 'timer', sesOf(r)); };
 
   // ---------- 2. Range hub: this session, one row per drill ----------
   function hubLog(box) {
     box.innerHTML = ''; if (!activeSession) return;
-    const order = [], by = {};
-    for (const r of history) { if (r.session !== activeSession) continue; const k = keyOf(r); if (!by[k]) { by[k] = []; order.push(k); } by[k].push(r); }
-    for (const k of order) {
-      const recs = by[k], free = isFree(k), who = [...new Set(recs.map((r) => r.shooter))];
+    for (const ev of sesEvents(activeSession)) {      // one line per visit, in the order you shot them
+      const k = ev.key, recs = ev.recs, free = isFree(k), who = [...new Set(recs.map((r) => r.shooter))];
       const per = who.map((w) => `${ini(w)} ${recs.filter((r) => r.shooter === w).length}`).join(' · ');
       let sub, best, bl;
       if (free) { sub = `${per} string${recs.length === 1 ? '' : 's'}`; best = Math.min(...recs.map(first).filter((v) => v != null)); bl = 'best first'; }
@@ -140,19 +141,20 @@
       }
       const row = el('button', 'hl-row'), tt = el('span', 'hl-t'); tt.append(el('b', null, nameOf(k)), el('i', null, sub));
       const bv = el('span', 'hl-b'); bv.append(el('b', null, isFinite(best) ? f2(best) : '—'), el('i', null, bl));
-      row.append(tt, bv, chev()); row.onclick = () => openRuns(k, 'range', activeSession); box.appendChild(row);
+      row.append(tt, bv, chev()); row.onclick = () => openRuns(ev.id, 'range', activeSession); box.appendChild(row);
     }
   }
 
   // ---------- 3. runs of one drill ----------
-  let rv = { key: null, back: 'range', sid: null, who: null };
-  function openRuns(key, back, sid) {
-    if (rv.key !== key) rv.who = null;
-    rv = Object.assign(rv, { key, back: back || rv.back, sid: sid || rv.sid || activeSession });
+  let rv = { ev: null, key: null, back: 'range', sid: null, who: null };
+  function openRuns(evId, back, sid) {
+    if (rv.ev !== evId) rv.who = null;
+    rv = Object.assign(rv, { ev: evId, back: back || rv.back, sid: sid || rv.sid || activeSession });
     renderRuns(); showScreen('runs'); $('view-runs').scrollTop = 0;
   }
   function renderRuns() {
-    const all = groupRecs(rv.sid, rv.key); if (!all.length) { showScreen(rv.back); return; }
+    const E = sesEvents(rv.sid).find((e) => e.id === rv.ev), all = E ? E.recs : []; if (!all.length) { showScreen(rv.back); return; }
+    rv.key = E.key;
     const free = isFree(rv.key), dry = rv.key.startsWith('dry:'), r0 = all.find((r) => r.targets) || all[0];
     $('runs-back').textContent = rv.back === 'timer' ? 'Timer' : 'Range';
     $('runs-title').textContent = nameOf(rv.key);
@@ -196,7 +198,7 @@
     const pr = !free && !dry && window.UI ? UI.allDrills().find((d) => d.name === rv.key) : null;
     const again = $('runs-again'); again.hidden = !free && !dry && !pr;
     again.textContent = free ? 'Free shoot again' : 'Shoot this drill again';
-    again.onclick = () => { if (dry) enterDrill('dry', rv.key.slice(4)); else if (window.UI) UI.shoot(pr || null); };
+    again.onclick = () => { if (dry) UI.shootDry(rv.key.slice(4)); else if (window.UI) UI.shoot(pr || null); };
   }
   $('runs-back').onclick = () => showScreen(rv.back);
 
@@ -244,7 +246,7 @@
     $('run-fp').onclick = () => { r.fired = Math.min(99, fired + 1); saveHistory(); renderRun(); };
     $('run-play').disabled = !r.clip; $('run-play').textContent = r.clip ? 'Play clip' : 'No clip';
     $('run-play').onclick = () => playClip(r);
-    $('run-del').onclick = () => { if (!confirm(`Delete this run (${f2(tot)} s)? It won't count in the session.`)) return; deleteRun(r); showScreen(rn.back === 'timer' ? 'timer' : groupRecs(sesOf(r), key).length ? 'runs' : 'range'); if (rn.back !== 'timer') renderRuns(); };
+    $('run-del').onclick = () => { if (!confirm(`Delete this run (${f2(tot)} s)? It won't count in the session.`)) return; deleteRun(r); showScreen(rn.back === 'timer' ? 'timer' : sesEvents(sesOf(r)).some((e) => e.id === rv.ev) ? 'runs' : 'range'); if (rn.back !== 'timer') renderRuns(); };
     return true;
   }
   $('run-back').onclick = () => { if (rn.back === 'runs') renderRuns(); showScreen(rn.back === 'timer' ? 'timer' : 'runs'); };

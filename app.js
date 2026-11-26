@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.8.8';
+const BUILD = 'v0.8.9';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -310,6 +310,8 @@ function goLive() {
   T.autoTimer = setInterval(() => {
     if (T.state !== 'live') return clearInterval(T.autoTimer);
     const quiet = (performance.now() - T.lastActivity) / 1000;
+    // a drill waits for all its shots (running between targets takes seconds); it only gives up after 30 s of quiet
+    if (T.preset) { if (quiet > 30 && liveShots().length) stop(); return; }
     const lim = S.auto > 0 ? S.auto : T.seriesOn ? 4 : 120;          // repeat strings always end on their own
     if (quiet > lim && (liveShots().length || quiet > (T.seriesOn ? 15 : 30))) stop();
   }, 250);
@@ -352,6 +354,18 @@ function trimExtras() {
   for (const q of T.shots) { if (q.removed) continue; if (++k > T.preset.shots && !q.keep) { q.removed = true; q.auto = 'extra'; } }
 }
 // complete = every shot the drill calls for was heard. Records from before v0.8.5 don't say: treat them as complete.
+// Drill visits ("events"): records from one entry into a drill, oldest first. Records from before v0.8.9 have no
+// event id: a run of the same drill in a row counts as one visit.
+const recKey = (r) => (r.mode === 'dry' ? 'dry:' + (r.drill || 'trigger') : r.drillName || 'Free shooting');
+function eventsOf(recs) {          // recs in any order -> [{ id, key, recs (newest first) }], oldest event first
+  const out = []; let cur = null;
+  for (const r of recs.slice().sort((a, b) => a.at.localeCompare(b.at))) {
+    const k = recKey(r);
+    if (!cur || cur.key !== k || (r.ev && cur.ev && r.ev !== cur.ev)) { cur = { id: r.ev || 'x' + r.id, key: k, ev: r.ev, recs: [] }; out.push(cur); }
+    if (r.ev) cur.ev = r.ev; cur.recs.unshift(r);
+  }
+  return out;
+}
 function recComplete(r) { return !r.drillShots || recShots(r).length >= r.drillShots; }
 function recUnderPar(r) { const t = recShots(r); return !!(r.par && t.length && recComplete(r) && t[t.length - 1] <= r.par); }
 
@@ -539,7 +553,7 @@ function drySummary() {
 }
 function saveDryRep(hit) {
   const shots = [{ t: +hit.t.toFixed(4) }]; if (hit.t2 != null) shots.push({ t: +hit.t2.toFixed(4) });
-  history.unshift(clipTag(tagRecord({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5), mode: 'dry', drill: S.dryDrill, at: new Date().toISOString(),
+  history.unshift(clipTag(tagRecord({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5), ev: T.ev, mode: 'dry', drill: S.dryDrill, at: new Date().toISOString(),
     shooter: S.shooter, gun: S.gun, delay: +T.delay.toFixed(2), acoustic: T.acoustic, match: +hit.score.toFixed(2),
     react: hit.react != null ? +hit.react.toFixed(4) : undefined, reload: hit.reload != null ? +hit.reload.toFixed(4) : undefined, shots })));
   saveHistory(); renderSession();
@@ -970,7 +984,7 @@ function autoSaveIfNeeded() {
     delay: +T.delay.toFixed(2), acoustic: T.acoustic, sens: S.sens,
     shots: serShots(), gate: S.gate,
     drillName: T.preset ? T.preset.name : undefined, rep: T.preset ? T.drillRes.length + 1 : undefined, par: presetPar() || null,
-    drillShots: T.preset ? T.preset.shots : undefined, steps: T.preset ? T.preset.steps : undefined, targets: T.preset ? T.preset.targets : undefined,
+    ev: T.ev, drillShots: T.preset ? T.preset.shots : undefined, steps: T.preset ? T.preset.steps : undefined, targets: T.preset ? T.preset.targets : undefined,
   };
   clipTag(rec);
   history.unshift(tagRecord(rec)); saveHistory(); T.saved = rec.id; renderSession();
@@ -1023,9 +1037,17 @@ function renderHistory() {
   const mine = history.filter((h) => h.shooter === S.shooter);
   const rs = mine.filter((h) => h.mode !== 'dry').map((h) => ({ h, q: summarize(recShots(h)) })).filter((x) => x.q.count);
   const bestOf = (arr, f) => { let b = null; for (const x of arr) { const v = f(x); if (v != null && isFinite(v) && (!b || v < b.v)) b = { v, at: x.h.at }; } return b; };
-  const bf = bestOf(rs, (x) => x.q.first), bs = bestOf(rs, (x) => minOf(x.q.splits)), bd = bestOf(mine.filter((h) => h.mode === 'dry' && h.drill !== 'reload').map((h) => ({ h })), (x) => recShots(x.h)[0]);
-  const cell = (k, b, w) => `<div><i>${k}</i><b>${b ? numS(b.v) : '—'}</b><em>${b ? `${w} · ${dayStr(b.at, { month: 'short', day: 'numeric' })}` : '&nbsp;'}</em></div>`;
-  $('hs-best').innerHTML = cell('Best first shot', bf, 'Range') + cell('Best split', bs, 'Range') + cell('Best dry draw', bd, 'Dry');
+  const bestOf2 = (arr, f) => { let b = null; for (const x of arr) { const v = f(x); if (v != null && isFinite(v) && (!b || v < b.v)) b = { v, h: x.h }; } return b; };
+  const cell = (k, b) => `<button data-ses="${b && b.h ? esc(b.h.session || 'day:' + b.h.at.slice(0, 10) + ':' + (b.h.mode === 'dry' ? 'dry' : 'range')) : ''}"><i>${k}</i><b>${b ? numS(b.v) : '—'}</b></button>`;
+  const num = (k, n) => `<div><i>${k}</i><b>${n}</b></div>`;
+  if (histFilter === 'dry') {       // dry fire has its own numbers: dry clicks are not shots fired
+    const dry = mine.filter((h) => h.mode === 'dry').map((h) => ({ h }));
+    $('hs-best').innerHTML = cell('Best dry draw', bestOf2(dry.filter((x) => x.h.drill !== 'reload'), (x) => recShots(x.h)[0])) + cell('Best reload', bestOf2(dry, (x) => x.h.reload)) + num('Dry reps', dry.length);
+  } else {
+    const fired = rs.reduce((a, x) => a + x.q.count, 0);
+    $('hs-best').innerHTML = cell('Best first shot', bestOf2(rs, (x) => (x.h.drillShots === 1 && !recComplete(x.h) ? null : x.q.first))) + cell('Best split', bestOf2(rs, (x) => minOf(x.q.splits.filter((v) => v >= 0.1)))) + num('Shots fired', fired);
+  }
+  $('hs-best').querySelectorAll('button[data-ses]').forEach((b) => b.onclick = () => b.dataset.ses && openSession(b.dataset.ses));
   $('hs-best').hidden = !history.length;
   document.querySelectorAll('.hs-pills button').forEach((b) => b.classList.toggle('on', b.dataset.f === histFilter));
   const all = histGroups(), live = all.find((g) => g.id === activeSession);
@@ -1162,8 +1184,8 @@ async function openSession(id) {
     mk(null); who.forEach(mk);
   }
   const shown = recs.filter((r) => sesWho == null || r.shooter === sesWho);
-  const groups = []; const gi = {};
-  for (const r of shown) { const k = r.mode === 'dry' ? ({ draw: 'Draw', reload: 'Reload' }[r.drill] || 'Trigger') : (r.drillName || 'Free shooting'); if (!gi[k]) { gi[k] = { name: k, recs: [] }; groups.push(gi[k]); } gi[k].recs.push(r); }
+  // one line per drill visit, in the order you shot them (Two-target, Free shooting, Two-target = 3 lines, not 2)
+  const groups = eventsOf(shown).map((e) => ({ name: e.key.startsWith('dry:') ? ({ draw: 'Draw', reload: 'Reload' }[e.key.slice(4)] || 'Trigger') : e.key, recs: e.recs.slice().reverse() }));
   const box = $('hd-body'); box.innerHTML = shown.length ? '' : '<p class="p-hint" style="text-align:center;margin:20px 0">Nothing saved in this session yet.</p>';
   for (const grp of groups) {
     const par = grp.recs.find((r) => r.par)?.par, n = grp.recs.length;
@@ -1245,12 +1267,24 @@ function enterDrill(mode, drill, preset) {
   $('drill-title').textContent = T.preset ? T.preset.name : DRILL_NAMES[mode === 'dry' ? S.dryDrill : 'range'];
   $('seg-rep').style.visibility = T.preset ? 'hidden' : 'visible';
   $('p-plan').hidden = !T.preset; $('p-res').textContent = presetPar() > 0 ? `Par ${presetPar().toFixed(2)} s` : '';
-  if (!activeSession) startSession(mode === 'dry' ? 'Dry fire' : 'Range');
+  T.ev = 'e' + Date.now().toString(36);              // this visit to the drill: one line in the session
   window.UI && (UI.renderPlan(), UI.gauge(0), UI.parMark(presetPar() || null));
   renderSession(); renderChips(); showScreen('timer');
 }
 // Back from the timer: the session keeps going (one session per trip); only End on the Range / Dry fire screen ends it.
-function leaveDrill() {
+// a sheet with a question and two answers; resolves true for the first
+function askSheet(title, text, yes, no) {
+  const D = $('ask-sheet'); $('ask-t').textContent = title; $('ask-p').textContent = text; $('ask-p').hidden = !text;
+  $('ask-yes').textContent = yes; $('ask-no').textContent = no;
+  return new Promise((ok) => {
+    $('ask-yes').onclick = (e) => { e.preventDefault(); D.close(); ok(true); };
+    $('ask-no').onclick = (e) => { e.preventDefault(); D.close(); ok(false); };
+    D.onclose = () => ok(false); D.showModal();
+  });
+}
+async function leaveDrill() {
+  const shot = T.ev && history.some((r) => r.ev === T.ev), busy = ['standby', 'live', 'reholster'].includes(T.state);
+  if ((shot || busy) && !T.learning && !(await askSheet('End this drill?', shot ? `${history.filter((r) => r.ev === T.ev).length} run${history.filter((r) => r.ev === T.ev).length === 1 ? '' : 's'} saved in the session.` : '', 'End drill', 'Keep going'))) return;
   if (T.learning) finishLearn();
   if ((isDry() || T.seriesOn || T.preset) && ['standby', 'live', 'reholster'].includes(T.state)) stopSeries();
   else if (T.state === 'standby') cancel(); else if (T.state === 'live') stop();
@@ -1363,7 +1397,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-backup').onclick = backupAll; $('btn-restore').onclick = () => $('file-restore').click(); $('file-restore').onchange = restoreAll;
   // ask the browser not to clear this app's data when the phone runs low on space
   try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch {}
-  document.querySelectorAll('[data-drill]').forEach((b) => b.onclick = () => enterDrill('dry', b.dataset.drill));
+  document.querySelectorAll('.p-menu[data-drill]').forEach((b) => b.onclick = () => UI.shootDry(b.dataset.drill));
   document.querySelectorAll('[data-back]').forEach((b) => b.onclick = () => showScreen(b.dataset.back));
   $('btn-back').onclick = leaveDrill;
   $('btn-ses-export').onclick = async (e) => { e.preventDefault(); if (await exportSession($('ses-dlg').dataset.id) === 'ok') { $('ses-dlg').close(); toast('Session exported'); } };
