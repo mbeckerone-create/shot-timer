@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.8.9';
+const BUILD = 'v0.8.10';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -277,7 +277,7 @@ async function startNow() {
   window.UI && UI.renderPlan();
   $('beepinfo').textContent = '';
   setMain(T.seriesOn ? 'STOP' : 'CANCEL', 'standby'); if (!isDry()) $('btn-review').disabled = true;
-  T.beepAt = beepAt; cancelAnimationFrame(T.raf); T.raf = requestAnimationFrame(tick);
+  T.beepAt = beepAt; T.beepWall = 0; cancelAnimationFrame(T.raf); T.raf = requestAnimationFrame(tick);
   requestWake();
 }
 
@@ -299,6 +299,8 @@ function tick() {
 
 function goLive() {
   T.sessAtBeep = sessType();
+  // wall-clock time of the beep: the camera keeps recording when iOS pauses the audio clock, so clips are timed by this
+  const c = audio.ctx; T.beepWall = Date.now() - Math.max(0, c.currentTime - (c.outputLatency || 0) - T.beepAt) * 1000;
   T.state = 'live'; T.lastActivity = performance.now();
   setStatus('GO', 'live'); setMain('STOP', 'stop');
   clearInterval(T.autoTimer);
@@ -341,13 +343,16 @@ function addShot(frame, db, bands) {
     if (n >= T.preset.shots && !T.doneTimer) T.doneTimer = setTimeout(() => { T.doneTimer = 0; if (T.state === 'live') stop(); }, 700);
   }
 }
-// Your own shot level this session: median of the last 40 kept range shots, minus 15 dB. Until there are 3, -18 dB
-// (shots logged -8 to +10 dB live on Nov 24-25; the draw / holster sounds -25 to -40 dB).
+// Your own shot level this session: median of the last 40 kept range shots, minus 15 dB. Until there are 3, -12 dB
+// (shots logged -8 to +10 dB live on Nov 24-25; the draw / holster sounds -15 to -40 dB).
 function stopFloor() {
   const lv = [];
   for (const r of history) { if (r.session !== activeSession || r.mode === 'dry') continue; for (const q of r.shots) if (!q.removed) lv.push(q.db); if (lv.length >= 40) break; }
-  return lv.length >= 3 ? median(lv) - 15 : -18;
+  return lv.length >= 3 ? median(lv) - 15 : -12;
 }
+// Was a gunshot heard at all? On Nov 25, 16 runs were saved from draw / holster / step sounds only (all -15 dB or
+// quieter, real shots +3 dB or louder). A string with nothing near your shot level is not a run: it isn't saved.
+const heardGun = () => isDry() || T.shots.some((q) => !q.removed && q.db >= stopFloor());
 // A drill rep keeps only the shots it calls for: later sounds are struck out as 'extra' (tap Keep to bring one back).
 function trimExtras() {
   if (!T.preset) return; let k = 0;
@@ -395,8 +400,10 @@ function stop() {
   for (const o of T.oscs) { try { o.stop(); } catch {} }
   clearInterval(T.autoTimer); cancelAnimationFrame(T.raf);
   clearTimeout(T.doneTimer); T.doneTimer = 0; trimExtras();
+  const quietOnly = T.shots.length && !heardGun();
+  if (quietOnly) for (const q of T.shots) if (!q.removed) { q.removed = true; q.auto = 'quiet'; }
   const n = liveShots().length, need = T.preset ? T.preset.shots : 0, inc = n > 0 && n < need;
-  T.state = 'done'; renderStats(); renderShots(); setStatus(!n ? 'No shots heard' : inc ? `Incomplete · ${n} of ${need} shots` : 'String done');
+  T.state = 'done'; renderStats(); renderShots(); setStatus(quietOnly ? 'No gunshot heard · not saved' : !n ? 'No shots heard' : inc ? `Incomplete · ${n} of ${need} shots` : 'String done');
   setMain('START'); $('btn-review').disabled = !n; $('btn-review').textContent = 'Score…';
   autoSaveIfNeeded();
   if (n) setTimeout(() => window.RUNS && RUNS.showRunDone(), 0);     // the result stays on screen until the next run
@@ -649,7 +656,14 @@ async function nextClipName() {
   return `${stem}-clip${n}`;
 }
 // Records made while filming carry the clip's name and where their beep sits in it, so data and video pair up.
-function clipTag(r) { if (film.on && film.log && film.log.recStartCtx != null) { r.clip = film.name; r.clipT = +(T.beepAt - film.log.recStartCtx).toFixed(2); } return r; }
+// Timed by the wall clock: on Nov 25 (1322 clip 14) iOS paused the audio clock ~8 s while the camera kept rolling,
+// so audio-clock times landed 8 s early in the video. Older logs without a wall time fall back to the audio clock.
+function clipTag(r) {
+  if (!(film.on && film.log && film.log.recStartCtx != null)) return r;
+  r.clip = film.name;
+  r.clipT = +(T.beepWall && film.log.recStartWall ? (T.beepWall - film.log.recStartWall) / 1000 : T.beepAt - film.log.recStartCtx).toFixed(2);
+  return r;
+}
 function filmLog(type, data) { if (!film.log) return; film.log.events.push(Object.assign({ type, ctx: +(audio.ctx.currentTime).toFixed(4), wall: Date.now() }, data)); }
 async function startFilm() {
   try { await ensureAudio(); } catch { setStatus('Mic blocked', 'err'); return; }
@@ -978,7 +992,7 @@ function drawMeter(db) {
 
 // ---------- history ----------
 function autoSaveIfNeeded() {
-  if (T.saved || !liveShots().length) return;
+  if (T.saved || !liveShots().length || !heardGun()) return;
   const rec = {
     id: Date.now().toString(36), at: new Date().toISOString(), shooter: S.shooter, gun: S.gun,
     delay: +T.delay.toFixed(2), acoustic: T.acoustic, sens: S.sens,
