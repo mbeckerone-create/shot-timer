@@ -34,7 +34,7 @@ function truthShots(db, t0, t1) {
 }
 const S = JSON.parse(fs.readFileSync(sessFile, 'utf8'));
 const recs = S.records.filter((r) => r.clip).sort((a, b) => a.at.localeCompare(b.at));
-const byClip = {}; for (const r of recs) (byClip[r.clip.slice(-5)] = byClip[r.clip.slice(-5)] || []).push(r);
+const byClip = {}; for (const r of recs) (byClip[r.clip.replace(/^.*-/, "")] = byClip[r.clip.replace(/^.*-/, "")] || []).push(r);
 const tot = { truth: 0, kept: 0, gated: 0, missed: 0, extra: 0, phoneKept: 0, phoneGated: 0, phoneMissed: 0, phoneExtra: 0, mKept: 0, mGated: 0, mMissed: 0, mExtra: 0 };
 for (const [clip, rs] of Object.entries(byClip)) {
   const f = path.join(wavDir, clip + '.wav'); if (!fs.existsSync(f)) { console.log(clip, '(no wav)'); continue; }

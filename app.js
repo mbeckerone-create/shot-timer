@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.8.7';
+const BUILD = 'v0.8.8';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -329,12 +329,22 @@ function addShot(frame, db, bands) {
   if (!shot.removed) T.lastActivity = performance.now();   // quiet bangs (other lanes) don't keep the string open
   renderShots(); renderStats(); renderDiag();
   if (T.preset) {
-    const n = liveShots().length; window.UI && UI.renderPlan(n);
+    // only sounds near your own shot level count toward the drill's shots (Nov 25: in 9 of 10 "Draw to first shot"
+    // reps the draw itself, ~0.8 s after the beep and 35-40 dB under the shot, counted as the shot and ended the rep
+    // before the real one). Quieter sounds stay in the string; the gate strikes them once the real shot is in.
+    const floor = stopFloor(), n = T.shots.filter((q) => !q.removed && q.db >= floor).length; window.UI && UI.renderPlan(n);
     setStatus(`Shot ${Math.min(n, T.preset.shots)} of ${T.preset.shots}`, 'live');
     // all shots in: end the string 0.7 s after the LAST one the drill calls for. Armed once: echoes and steel dings
     // after it used to restart this timer and join the rep (clip 5 rep 1: 4 shots done at 2.50 s, saved as 9 at 4.62 s).
     if (n >= T.preset.shots && !T.doneTimer) T.doneTimer = setTimeout(() => { T.doneTimer = 0; if (T.state === 'live') stop(); }, 700);
   }
+}
+// Your own shot level this session: median of the last 40 kept range shots, minus 15 dB. Until there are 3, -18 dB
+// (shots logged -8 to +10 dB live on Nov 24-25; the draw / holster sounds -25 to -40 dB).
+function stopFloor() {
+  const lv = [];
+  for (const r of history) { if (r.session !== activeSession || r.mode === 'dry') continue; for (const q of r.shots) if (!q.removed) lv.push(q.db); if (lv.length >= 40) break; }
+  return lv.length >= 3 ? median(lv) - 15 : -18;
 }
 // A drill rep keeps only the shots it calls for: later sounds are struck out as 'extra' (tap Keep to bring one back).
 function trimExtras() {
