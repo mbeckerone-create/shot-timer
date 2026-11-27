@@ -4,7 +4,7 @@ html, body { background: var(--root-bg, #e4e5e8); color-scheme: light; }
 html[data-skin="current"], html[data-skin="softdark"] { color-scheme: dark; }
 html[data-skin="soft"] { --root-bg: #e4e5e8; } html[data-skin="current"] { --root-bg: #0d0f12; } html[data-skin="softdark"] { --root-bg: #0e0f11; }
 
-#app.phone.proto { --z: 1.3; zoom: var(--z); width: calc(100vw / var(--z)); height: calc(100dvh / var(--z)); max-width: none; aspect-ratio: auto;
+#app.phone.proto { --z: 1.3; zoom: var(--z); width: calc(100vw / var(--z)); height: calc(var(--apph, 100dvh) / var(--z)); max-width: none; aspect-ratio: auto;
   border: 0; border-radius: 0; box-shadow: none; padding: 0; position: relative; overflow: hidden; user-select: none; -webkit-user-select: none; }
 #app input, #app textarea { user-select: text; -webkit-user-select: text; }
 #app .view:not(.active) { display: none !important; }
@@ -42,7 +42,7 @@ html[data-skin="soft"] { --root-bg: #e4e5e8; } html[data-skin="current"] { --roo
 
 /* History, session detail and Settings sit outside the scaled UI (no zoom) and keep their own layout at the phone's
    native size, in the current style's colours; they fill the screen above the tab bar */
-body > .view.legacy { position: fixed; left: 0; right: 0; top: 0; bottom: var(--tabh, 80px); z-index: 5; overflow-y: auto; -webkit-overflow-scrolling: touch;
+body > .view.legacy { position: fixed; left: 0; right: 0; top: 0; bottom: auto; height: calc(var(--apph, 100dvh) - var(--tabh, 80px)); box-sizing: border-box; z-index: 5; overflow-y: auto; -webkit-overflow-scrolling: touch;
   padding: calc(env(safe-area-inset-top, 0px) + 8px) 16px 16px; background: var(--bg); color: var(--text); font-size: 16px; }
 body > .view.legacy > * { flex-shrink: 0; }
 body > .view.legacy h1 { font-size: 28px; }
@@ -71,7 +71,7 @@ html[data-skin="softdark"]:root { --bg: #0e0f11; --panel: #1a1b1f; --panel2: #23
 
 /* fixes after the first run on a phone-sized screen */
 #app #view-timer.scr { overflow-y: auto; }
-#app #view-timer:has(#p-plan:not([hidden])) .p-gauge { display: none !important; }   /* drill plan showing: drop the dial so it all fits */
+#app .p-gauge { display: none !important; }   /* v0.9.1: the clock dial is gone everywhere (free shooting too): it took a third of the screen */
 #app #view-timer.scr > .shotlist { min-height: 0; flex: 1 1 0; }
 #app .shotlist li { grid-template-columns: 22px 1fr minmax(0, 1.4fr) 22px; }
 #app .shotlist li .sp { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -392,3 +392,8 @@ dialog.sheet #picker-list { display: flex; flex-direction: column; gap: 8px; }
 #app #view-timer.has-rl #beepinfo:empty, #app #view-timer.has-rl #p-res:empty { display: none; }
 #app .shotlist li.rl { align-items: stretch; }
 #app .shotlist li.rl.dim { align-items: center; } #app .shotlist li.rl.dim .rl-top { flex: 1; }
+
+/* v0.9.1: the page itself never scrolls (that is what slid the screen under the status bar and blurred it);
+   only lists inside it do. Empty status lines take no room. */
+html, body { overflow: hidden; height: 100%; }
+#app #beepinfo:empty, #app #p-res:empty { display: none; }

@@ -16,6 +16,11 @@
   }
   function applyZoom() {
     const z = Math.max(1, Math.min(window.innerWidth / 300, 1.6)); P.style.setProperty('--z', z.toFixed(4));
+    // Home-screen app on iOS 26: the viewport (100dvh, innerHeight) comes up a status bar short, leaving a grey band
+    // under the tab bar. Upright, the app fills the whole screen, so size it to the screen.
+    const home = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone;
+    const h = home && innerHeight > innerWidth ? Math.max(innerHeight, screen.height) : innerHeight;
+    document.documentElement.style.setProperty('--apph', h + 'px');
     requestAnimationFrame(() => { const t = P.querySelector('.tabs'); if (t) document.documentElement.style.setProperty('--tabh', t.getBoundingClientRect().height + 'px'); });
   }
   window.addEventListener('resize', applyZoom); applyZoom();
