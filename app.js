@@ -1,7 +1,7 @@
 /* Shot Timer — app logic. Timing lives in the AudioWorklet (worklet.js + detector.js);
  * this file runs the UI, the start/par beeps, and history. */
 'use strict';
-const BUILD = 'v0.8.11';
+const BUILD = 'v0.9.0';
 const $ = (id) => document.getElementById(id);
 const fmt = (t) => (t == null || !isFinite(t)) ? '—' : t.toFixed(3);
 
@@ -946,7 +946,8 @@ function renderStats() {
   $('s-split').textContent = fmt(s.splits[s.splits.length - 1]); $('s-avg').textContent = fmt(s.avg);
 }
 function renderShots() {
-  const ol = $('shotlist'); ol.innerHTML = '';
+  const ol = $('shotlist'); ol.innerHTML = ''; ol.classList.remove('rl-on');
+  $('view-timer').classList.remove('has-rl');
   if (isDry()) {
     if (!T.series.length && !(T.ignored || []).length) return;
     const head = document.createElement('li'); head.className = 'head';
@@ -966,21 +967,61 @@ function renderShots() {
     });
     return;
   }
-  if (!T.shots.length) return;
-  const head = document.createElement('li'); head.className = 'head';
-  head.innerHTML = '<span>#</span><span>Time</span><span class="sp">Split</span><span></span>'; ol.appendChild(head);
-  let prev = null, n = 0;
-  T.shots.forEach((s, i) => {
-    const li = document.createElement('li'); if (s.removed) li.className = 'removed';
-    const split = !s.removed && prev != null ? s.t - prev : null;
-    if (!s.removed) { n++; prev = s.t; }
-    li.innerHTML = `<span class="n">${s.removed ? '' : n}</span><span class="t">${fmt(s.t)}</span><span class="sp">${s.removed ? (s.auto === 'quiet' ? 'quieter · not yours?' : s.auto === 'extra' ? 'after the last shot' : '') : (n === 1 ? 'draw' : fmt(split))}</span>`;
-    const x = document.createElement('button'); x.className = 'x'; x.innerHTML = `<span class="mi mi-${s.removed ? 'reload' : 'x'}" aria-hidden="true"></span>`;
-    x.title = s.removed ? 'Restore shot' : 'Not a shot — remove';
-    x.onclick = () => { s.removed = !s.removed; if (!s.removed) { s.keep = true; delete s.auto; } renderShots(); renderStats(); if (T.saved) updateSaved(); };
-    li.appendChild(x); ol.prepend(li);
-  });
-  ol.prepend(head);
+  renderRangeList(ol);
+}
+// Range: under the times, every rep of this drill visit (or every string of free shooting), each with its shots.
+// Drill reps run oldest first with the reps still to go; free-shooting strings run newest first. Tap a row to open it.
+const TG_COL = ['var(--p-text)', 'var(--p-dry)', '#e3b58f', '#a9d5a0', '#d7a6e0', '#e8d88a', '#8fd3d9', '#f0a3a3'];
+function renderRangeList(ol) {
+  ol.classList.add('rl-on');
+  const recs = history.filter((r) => r.ev && r.ev === T.ev && r.mode !== 'dry').reverse();          // oldest first
+  const liveNow = (T.state === 'live' || T.state === 'standby') && !T.saved;
+  const multi = new Set(recs.map((r) => r.shooter)).size > 1;
+  const kept = (r) => r.shots.filter((q) => !q.removed).map((q) => q.t);
+  const tgOf = (steps, k) => { if (!steps) return null; let i = 0; for (const x of steps) { if (x.reload) continue; if (k < i + x.n) return x.t; i += x.n; } return null; };
+  const chips = (ts, steps, need) => {                 // a chip per target (drills) or per shot (free shooting)
+    if (!steps) return ts.map((t) => `<span class="rl-c">${fmt2(t)}</span>`).join('');
+    const groups = []; const n = Math.max(ts.length, need || 0);
+    for (let k = 0; k < n; k++) { const tg = tgOf(steps, k); let g = groups[groups.length - 1]; if (!g || g.tg !== tg) groups.push(g = { tg, h: '' }); g.h += k < ts.length ? `<span>${fmt2(ts[k])}</span>` : '<i class="rl-dot"></i>'; }
+    return groups.map((g) => `<span class="rl-c">${g.tg ? `<i class="rl-t" style="background:${TG_COL[(g.tg - 1) % TG_COL.length]}">T${g.tg}</i>` : ''}${g.h}</span>`).join('');
+  };
+  const row = (o) => {
+    const li = document.createElement('li'); li.className = 'rl' + (o.cls ? ' ' + o.cls : '');
+    li.innerHTML = `<div class="rl-top"><b>${o.name}</b><span class="rl-note">${o.note || ''}</span><b class="rl-tot">${o.tot ?? ''}</b></div>` + (o.shots ? `<div class="rl-shots">${o.shots}</div>` : '');
+    if (o.id) { li.tabIndex = 0; li.setAttribute('role', 'button'); li.onclick = () => window.RUNS && RUNS.openRun(o.id, 'timer'); }
+    return li;
+  };
+  const who = (r) => (multi ? ` <i class="rl-who">${ini(r.shooter)}</i>` : '');
+  const fmt2 = (v) => (v == null ? '—' : v.toFixed(2));
+  const out = [];
+  if (T.preset) {
+    for (const r of recs) {
+      const t = kept(r), last = t[t.length - 1], need = r.drillShots;
+      const note = need && t.length < need ? `${t.length} of ${need} · not counted` : r.par ? (last <= r.par ? `${fmt2(r.par - last)} under par` : `${fmt2(last - r.par)} over par`) : '';
+      out.push(row({ name: `Rep ${r.rep || '?'}${who(r)}`, note, tot: fmt2(last), shots: chips(t, r.steps, need), id: r.id, cls: need && t.length < need ? 'inc' : '' }));
+    }
+    let k = T.drillRes.length + 1;
+    if (liveNow) {
+      const t = liveShots(), live = T.state === 'live';
+      out.push(row({ name: `Rep ${k}`, note: live ? 'live' : 'standby', tot: t.length ? fmt2(t[t.length - 1]) : '', shots: chips(t, T.preset.steps, T.preset.shots), cls: 'cur' })); k++;
+    }
+    for (let first = !liveNow; k <= T.preset.reps; k++, first = false) out.push(row({ name: `Rep ${k}`, note: first ? 'up next' : '—', cls: 'dim' }));
+  } else {
+    const firsts = recs.map((r) => kept(r)[0]), best = recs.length > 1 ? Math.min(...firsts) : null;
+    if (liveNow && T.state === 'live' && liveShots().length) { const t = liveShots(); out.push(row({ name: `String ${recs.filter((r) => r.shooter === S.shooter).length + 1}`, note: 'live', tot: fmt2(t[t.length - 1]), shots: chips(t), cls: 'cur' })); }
+    const num = (r) => recs.filter((h) => h.shooter === r.shooter).indexOf(r) + 1;     // numbered per shooter, as on the run screen
+    recs.slice().reverse().forEach((r) => {
+      const t = kept(r);
+      out.push(row({ name: `String ${num(r)}${who(r)}`, note: best != null && t[0] === best ? 'best first' : '', tot: fmt2(t[t.length - 1]), shots: chips(t), id: r.id }));
+    });
+  }
+  if (!out.length) return;
+  const head = document.createElement('li'); head.className = 'rl-head';
+  head.innerHTML = `<span>${T.preset ? 'Reps' : 'Strings · newest first'}</span>`;
+  if (recs.length) { const b = document.createElement('button'); b.textContent = T.preset ? 'See runs' : 'See all'; b.onclick = () => window.RUNS && RUNS.openRuns(T.ev, 'timer', activeSession); head.appendChild(b); }
+  ol.append(head, ...out); $('view-timer').classList.add('has-rl');
+  const cur = ol.querySelector('.cur, .dim');                    // keep the rep you're on in view
+  if (cur && T.preset) ol.scrollTop = Math.max(0, cur.offsetTop - ol.offsetTop - 30 - (cur.classList.contains('cur') ? 0 : 50));
 }
 let meterMax = -10, meterMin = -70;
 function drawMeter(db) {
@@ -1001,13 +1042,13 @@ function autoSaveIfNeeded() {
     ev: T.ev, drillShots: T.preset ? T.preset.shots : undefined, steps: T.preset ? T.preset.steps : undefined, targets: T.preset ? T.preset.targets : undefined,
   };
   clipTag(rec);
-  history.unshift(tagRecord(rec)); saveHistory(); T.saved = rec.id; renderSession();
+  history.unshift(tagRecord(rec)); saveHistory(); T.saved = rec.id; renderSession(); renderShots();
   $('btn-review').textContent = 'Score…'; $('btn-review').disabled = false; renderHistory();
 }
 const serShots = () => T.shots.map((s) => ({ t: +s.t.toFixed(4), db: +s.db.toFixed(1), removed: s.removed || undefined, gated: s.auto === 'quiet' || undefined, extra: s.auto === 'extra' || undefined, keep: s.keep || undefined }));
 function updateSaved() {
   const r = history.find((h) => h.id === T.saved); if (!r) return;
-  r.shots = serShots(); saveHistory(); renderHistory();
+  r.shots = serShots(); saveHistory(); renderHistory(); renderShots();
 }
 function recShots(r) { return r.shots.filter((s) => !s.removed).map((s) => s.t); }
 
@@ -1283,7 +1324,7 @@ function enterDrill(mode, drill, preset) {
   $('p-plan').hidden = !T.preset; $('p-res').textContent = presetPar() > 0 ? `Par ${presetPar().toFixed(2)} s` : '';
   T.ev = 'e' + Date.now().toString(36);              // this visit to the drill: one line in the session
   window.UI && (UI.renderPlan(), UI.gauge(0), UI.parMark(presetPar() || null));
-  renderSession(); renderChips(); showScreen('timer');
+  renderSession(); renderChips(); renderShots(); showScreen('timer');
 }
 // Back from the timer: the session keeps going (one session per trip); only End on the Range / Dry fire screen ends it.
 // a sheet with a question and two answers; resolves true for the first

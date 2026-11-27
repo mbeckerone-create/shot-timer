@@ -57,12 +57,13 @@
     }
     const d = (T.drillRes || []).find((x) => x.rec === r.id);
     if (d) { const v = total(r); d.inc = !!r.drillShots && live(r).length < r.drillShots && live(r).length > 0; d.v = v ?? null; d.ok = recUnderPar(r); if (window.UI) UI.renderPlan(); }
+    renderShots();                                                   // the reps / strings list on the timer
   }
   function deleteRun(r) {
     history = history.filter((h) => h !== r); saveHistory(); if (typeof renderHistory === 'function') renderHistory(); renderSession();
     const i = (T.drillRes || []).findIndex((x) => x.rec === r.id); if (i >= 0) { T.drillRes.splice(i, 1); if (window.UI) UI.renderPlan(); }
     if (T.saved === r.id) { T.saved = false; T.shots = []; renderShots(); renderStats(); $('btn-review').disabled = true; hideRunDone(); setStatus('Run deleted'); }
-    toast('Run deleted');
+    renderShots(); toast('Run deleted');
   }
 
   // ---------- 1. run done ----------
